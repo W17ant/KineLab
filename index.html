@@ -980,13 +980,13 @@
   <!-- BOTTOM PLAYBACK & SCRUBBER BAR -->
   <footer class="bottom-bar">
     <div class="transport-group">
-      <button id="playPauseBtn" class="play-btn" onclick="togglePlayback()" title="Play / Pause">
+      <button id="playPauseBtn" class="play-btn" onclick="togglePlayback()" title="Play / Pause (Spacebar)">
         <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
       </button>
-      <button class="step-btn" onclick="stepFrames(-5)" title="Back 5 Frames">-5F</button>
-      <button class="step-btn" onclick="stepFrames(-1)" title="Back 1 Frame">-1F</button>
-      <button class="step-btn" onclick="stepFrames(1)" title="Forward 1 Frame">+1F</button>
-      <button class="step-btn" onclick="stepFrames(5)" title="Forward 5 Frames">+5F</button>
+      <button class="step-btn" onclick="stepFrames(-5)" title="Back 5 Frames (Shift + Left)">-5F</button>
+      <button class="step-btn" onclick="stepFrames(-1)" title="Back 1 Frame (Left Arrow)">-1F</button>
+      <button class="step-btn" onclick="stepFrames(1)" title="Forward 1 Frame (Right Arrow)">+1F</button>
+      <button class="step-btn" onclick="stepFrames(5)" title="Forward 5 Frames (Shift + Right)">+5F</button>
     </div>
 
     <div class="scrubber-wrap">
@@ -1037,6 +1037,7 @@
     let dragState = null;
 
     const STEP_DT = 1 / 60;
+    const TOUCH_FINGER_LIFT = 24; // Pixel lift on touchscreens so finger never covers landmark
 
     function fillRoundRect(context, x, y, w, h, r) {
       context.beginPath();
@@ -1099,6 +1100,135 @@
       return annotations.find(a => a.type === 'scale') || null;
     }
 
+    // 5-Degree Axis Snapping (Horizontal & Vertical)
+    function applyAxisSnapping(fixedPt, movingPt, box, thresholdDeg = 5) {
+      const pFixed = normToPixel(fixedPt, box);
+      const pMoving = normToPixel(movingPt, box);
+      const dx = pMoving.x - pFixed.x;
+      const dy = pMoving.y - pFixed.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 10) return movingPt;
+
+      let deg = Math.atan2(dy, dx) * (180 / Math.PI);
+      const targets = [0, 90, -90, 180, -180];
+      for (const t of targets) {
+        if (Math.abs(deg - t) <= thresholdDeg) {
+          const snappedRad = t * (Math.PI / 180);
+          const snappedPxX = pFixed.x + Math.cos(snappedRad) * dist;
+          const snappedPxY = pFixed.y + Math.sin(snappedRad) * dist;
+          return pixelToNorm(snappedPxX, snappedPxY, box);
+        }
+      }
+      return movingPt;
+    }
+
+    // Geometry & Hit-Testing Helpers
+    function distToSegment(p, a, b) {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+      let t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
+      return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+    }
+
+    function findHitHandle(pt, box) {
+      const hitRadius = 26;
+      for (let i = annotations.length - 1; i >= 0; i--) {
+        const item = annotations[i];
+        if (item.type === 'angle') {
+          const keys = ['p1', 'vertex', 'p3'];
+          for (const k of keys) {
+            const hp = normToPixel(item[k], box);
+            if (Math.hypot(pt.x - hp.x, pt.y - hp.y) <= hitRadius) {
+              return { item, handleKey: k };
+            }
+          }
+          const vp = normToPixel(item.vertex, box);
+          if (Math.hypot(pt.x - (vp.x + 42), pt.y - (vp.y - 18)) <= 36) {
+            return { item, handleKey: 'vertex' };
+          }
+        } else if (
+          item.type === 'line' ||
+          item.type === 'plumb' ||
+          item.type === 'arrow' ||
+          item.type === 'circle' ||
+          item.type === 'scale'
+        ) {
+          for (const k of ['p1', 'p2']) {
+            const hp = normToPixel(item[k], box);
+            if (Math.hypot(pt.x - hp.x, pt.y - hp.y) <= hitRadius) {
+              return { item, handleKey: k };
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    // Hit-testing body for translation
+    function findHitBody(pt, box) {
+      const hitDist = 20;
+      for (let i = annotations.length - 1; i >= 0; i--) {
+        const item = annotations[i];
+        if (item.type === 'angle') {
+          const p1 = normToPixel(item.p1, box);
+          const v = normToPixel(item.vertex, box);
+          const p3 = normToPixel(item.p3, box);
+          if (distToSegment(pt, p1, v) <= hitDist || distToSegment(pt, v, p3) <= hitDist) {
+            return item;
+          }
+        } else if (item.type === 'line' || item.type === 'scale' || item.type === 'plumb' || item.type === 'arrow') {
+          const p1 = normToPixel(item.p1, box);
+          const p2 = normToPixel(item.p2, box);
+          if (distToSegment(pt, p1, p2) <= hitDist) {
+            return item;
+          }
+        } else if (item.type === 'circle') {
+          const p1 = normToPixel(item.p1, box);
+          const p2 = normToPixel(item.p2, box);
+          const r = Math.max(12, Math.hypot(p2.x - p1.x, p2.y - p1.y));
+          if (Math.abs(Math.hypot(pt.x - p1.x, pt.y - p1.y) - r) <= hitDist) {
+            return item;
+          }
+        } else if (item.type === 'pen' && item.points.length > 1) {
+          for (let j = 0; j < item.points.length - 1; j++) {
+            const a = normToPixel(item.points[j], box);
+            const b = normToPixel(item.points[j + 1], box);
+            if (distToSegment(pt, a, b) <= hitDist) return item;
+          }
+        }
+      }
+      return null;
+    }
+
+    function cloneItemCoords(item) {
+      if (item.type === 'angle') {
+        return { p1: { ...item.p1 }, vertex: { ...item.vertex }, p3: { ...item.p3 } };
+      } else if (item.type === 'pen') {
+        return { points: item.points.map(p => ({ ...p })) };
+      } else {
+        return { p1: { ...item.p1 }, p2: { ...item.p2 } };
+      }
+    }
+
+    // Keyboard Controls: Play/Pause and Frame Stepping
+    window.addEventListener('keydown', (e) => {
+      const activeTag = document.activeElement ? document.activeElement.tagName : '';
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlayback();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        stepFrames(e.shiftKey ? -5 : -1);
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        stepFrames(e.shiftKey ? 5 : 1);
+      }
+    });
+
     function selectTool(tool) {
       activeTool = tool;
       pendingAnglePts = [];
@@ -1121,25 +1251,25 @@
         else if (pendingAnglePts.length === 2) textEl.textContent = 'Angle: Tap 2nd limb landmark';
       } else if (activeTool === 'scale') {
         dotEl.style.background = 'var(--ios-cyan)';
-        textEl.textContent = 'Scale: Touch and drag across a known reference length in the frame';
+        textEl.textContent = 'Scale: Touch & drag across known reference length in frame';
       } else if (activeTool === 'line') {
         const scaleObj = getScaleAnnotation();
         if (scaleObj) {
           dotEl.style.background = 'var(--ios-green)';
-          textEl.textContent = `Line: Drag to measure distance (${scaleObj.knownValue} ${scaleObj.unit} scale calibrated)`;
+          textEl.textContent = `Line: Drag to measure distance (${scaleObj.knownValue} ${scaleObj.unit} scale active)`;
         } else {
-          textEl.textContent = 'Line: Drag across landmarks (Select Scale tool to calibrate real distance)';
+          textEl.textContent = 'Line: Drag across landmarks (Select Scale to calibrate real distance)';
         }
       } else if (activeTool === 'plumb') {
         textEl.textContent = 'Plumb Line: Drag vertically or horizontally to snap reference';
       } else if (activeTool === 'arrow') {
-        textEl.textContent = 'Vector: Touch and drag in the direction of force/motion';
+        textEl.textContent = 'Vector: Touch and drag in direction of force/motion';
       } else if (activeTool === 'circle') {
         textEl.textContent = 'Marker: Tap or drag to place landmark circle';
       } else if (activeTool === 'pen') {
         textEl.textContent = 'Trace: Draw freehand path with finger or Apple Pencil';
       } else {
-        textEl.textContent = 'Move: Drag any point handle or tap a measurement to inspect';
+        textEl.textContent = 'Move: Drag handles to adjust, or drag body to translate markup';
       }
     }
 
@@ -1206,7 +1336,6 @@
       }
       document.getElementById('scaleModalBackdrop').style.display = 'none';
       pendingScaleItemId = null;
-      // Auto-switch to Line tool so distance measurement is immediately ready
       selectTool('line');
       syncInspectorUI();
       renderFrame();
@@ -1233,7 +1362,7 @@
       if (e.key === 'Enter') confirmScaleModal();
     });
 
-    // Video upload & playback
+    // Video Upload & Playback
     function handleVideoUpload(e) {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
@@ -1334,7 +1463,7 @@
     video.addEventListener('timeupdate', updateScrubberUI);
     video.addEventListener('ended', updatePlayIcon);
 
-    // Math helpers
+    // Math & Measurement helpers
     function computeAngleDegrees(p1, vertex, p3, reflex = false) {
       const a1 = Math.atan2(p1.y - vertex.y, p1.x - vertex.x);
       const a2 = Math.atan2(p3.y - vertex.y, p3.x - vertex.x);
@@ -1370,66 +1499,57 @@
       return annotations.find(a => a.id === selectedId) || null;
     }
 
-    function getStageCoords(e) {
+    function getStageCoords(e, applyTouchLift = false) {
       const rect = canvas.getBoundingClientRect();
+      const isTouch = e.pointerType === 'touch';
+      const lift = (applyTouchLift && isTouch) ? -TOUCH_FINGER_LIFT : 0;
       return {
         x: e.clientX - rect.left,
-        y: e.clientY - rect.top
+        y: e.clientY - rect.top + lift
       };
     }
 
-    function findHitHandle(pt, box) {
-      const hitRadius = 24;
-      for (let i = annotations.length - 1; i >= 0; i--) {
-        const item = annotations[i];
-        if (item.type === 'angle') {
-          const keys = ['p1', 'vertex', 'p3'];
-          for (const k of keys) {
-            const hp = normToPixel(item[k], box);
-            if (Math.hypot(pt.x - hp.x, pt.y - hp.y) <= hitRadius) {
-              return { item, handleKey: k };
-            }
-          }
-          const vp = normToPixel(item.vertex, box);
-          if (Math.hypot(pt.x - (vp.x + 42), pt.y - (vp.y - 18)) <= 36) {
-            return { item, handleKey: 'vertex' };
-          }
-        } else if (
-          item.type === 'line' ||
-          item.type === 'plumb' ||
-          item.type === 'arrow' ||
-          item.type === 'circle' ||
-          item.type === 'scale'
-        ) {
-          for (const k of ['p1', 'p2']) {
-            const hp = normToPixel(item[k], box);
-            if (Math.hypot(pt.x - hp.x, pt.y - hp.y) <= hitRadius) {
-              return { item, handleKey: k };
-            }
-          }
-        }
-      }
-      return null;
-    }
-
+    // Pointer Interaction (Canvas)
     canvas.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
-      const pt = getStageCoords(e);
-      cursorPos = pt;
+
+      // Raw stage coordinates for precision hit-testing
+      const rawPt = getStageCoords(e, false);
       const box = getVideoBox();
+
+      // Check handle hit first
+      const hitHandle = findHitHandle(rawPt, box);
+
+      // Coordinate for creation / positioning (with touch finger lift applied)
+      const pt = getStageCoords(e, !hitHandle);
+      cursorPos = pt;
       const normPt = pixelToNorm(pt.x, pt.y, box);
 
       showLoupeAt(pt);
 
       if (pendingAnglePts.length === 0) {
-        const hit = findHitHandle(pt, box);
-        if (hit) {
-          selectedId = hit.item.id;
+        if (hitHandle) {
+          selectedId = hitHandle.item.id;
           dragState = {
             type: 'handle',
-            item: hit.item,
-            handleKey: hit.handleKey
+            item: hitHandle.item,
+            handleKey: hitHandle.handleKey
+          };
+          syncInspectorUI();
+          renderFrame();
+          return;
+        }
+
+        // Tweak 3: Check if touching/clicking the markup body to translate entire measurement
+        const hitBody = findHitBody(rawPt, box);
+        if (hitBody) {
+          selectedId = hitBody.id;
+          dragState = {
+            type: 'translate',
+            item: hitBody,
+            startNormPt: pixelToNorm(rawPt.x, rawPt.y, box),
+            initCoords: cloneItemCoords(hitBody)
           };
           syncInspectorUI();
           renderFrame();
@@ -1437,6 +1557,7 @@
         }
       }
 
+      // Tool-specific creation
       if (activeTool === 'angle') {
         pendingAnglePts.push(normPt);
         if (pendingAnglePts.length === 3) {
@@ -1470,7 +1591,7 @@
           type: 'scale',
           label: 'Scale',
           color: '#64D2FF',
-          dashed: true,
+          dashed: false,
           knownValue: prevVal,
           unit: prevUnit,
           confirmed: false,
@@ -1523,14 +1644,15 @@
     });
 
     canvas.addEventListener('pointermove', (e) => {
-      const pt = getStageCoords(e);
-      cursorPos = pt;
       const box = getVideoBox();
+      const pt = getStageCoords(e, dragState && dragState.type !== 'translate');
+      cursorPos = pt;
       const normPt = pixelToNorm(pt.x, pt.y, box);
 
       if (dragState) {
         showLoupeAt(pt);
         const item = dragState.item;
+
         if (dragState.type === 'handle' || dragState.type === 'create' || dragState.type === 'create-scale') {
           if (item.type === 'plumb') {
             const p1Px = normToPixel(item.p1, box);
@@ -1541,8 +1663,33 @@
             } else {
               item.p2 = { nx: normPt.nx, ny: item.p1.ny };
             }
+          } else if (item.type === 'line' || item.type === 'scale') {
+            // Tweak 2: 5-degree snapping to horizontal & vertical
+            const otherKey = dragState.handleKey === 'p1' ? 'p2' : 'p1';
+            item[dragState.handleKey] = applyAxisSnapping(item[otherKey], normPt, box, 5);
           } else {
             item[dragState.handleKey] = normPt;
+          }
+        } else if (dragState.type === 'translate') {
+          // Tweak 3: Translate whole measurement without changing angle or size
+          const rawMovePt = getStageCoords(e, false);
+          const currentNorm = pixelToNorm(rawMovePt.x, rawMovePt.y, box);
+          const dNx = currentNorm.nx - dragState.startNormPt.nx;
+          const dNy = currentNorm.ny - dragState.startNormPt.ny;
+          const orig = dragState.initCoords;
+
+          if (item.type === 'angle') {
+            item.p1 = { nx: Math.max(0, Math.min(1, orig.p1.nx + dNx)), ny: Math.max(0, Math.min(1, orig.p1.ny + dNy)) };
+            item.vertex = { nx: Math.max(0, Math.min(1, orig.vertex.nx + dNx)), ny: Math.max(0, Math.min(1, orig.vertex.ny + dNy)) };
+            item.p3 = { nx: Math.max(0, Math.min(1, orig.p3.nx + dNx)), ny: Math.max(0, Math.min(1, orig.p3.ny + dNy)) };
+          } else if (item.type === 'pen') {
+            item.points = orig.points.map(p => ({
+              nx: Math.max(0, Math.min(1, p.nx + dNx)),
+              ny: Math.max(0, Math.min(1, p.ny + dNy))
+            }));
+          } else {
+            item.p1 = { nx: Math.max(0, Math.min(1, orig.p1.nx + dNx)), ny: Math.max(0, Math.min(1, orig.p1.ny + dNy)) };
+            item.p2 = { nx: Math.max(0, Math.min(1, orig.p2.nx + dNx)), ny: Math.max(0, Math.min(1, orig.p2.ny + dNy)) };
           }
         } else if (dragState.type === 'pen') {
           item.points.push(normPt);
@@ -1696,6 +1843,41 @@
       ctx.stroke();
     }
 
+    // Tweak 4: Draw Caliper Bracket Ends for Scale Tool
+    function drawScaleCaliperBrackets(p1, p2, color, isSel) {
+      const ang = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+      const capLen = 13;
+      const hookLen = 8;
+
+      const nx = -Math.sin(ang);
+      const ny = Math.cos(ang);
+      const dx = Math.cos(ang);
+      const dy = Math.sin(ang);
+
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = isSel ? 3 : 2.4;
+      ctx.lineCap = 'square';
+
+      // Left Caliper Bracket: [
+      ctx.beginPath();
+      ctx.moveTo(p1.x + nx * capLen + dx * hookLen, p1.y + ny * capLen + dy * hookLen);
+      ctx.lineTo(p1.x + nx * capLen, p1.y + ny * capLen);
+      ctx.lineTo(p1.x - nx * capLen, p1.y - ny * capLen);
+      ctx.lineTo(p1.x - nx * capLen + dx * hookLen, p1.y - ny * capLen + dy * hookLen);
+      ctx.stroke();
+
+      // Right Caliper Bracket: ]
+      ctx.beginPath();
+      ctx.moveTo(p2.x + nx * capLen - dx * hookLen, p2.y + ny * capLen - dy * hookLen);
+      ctx.lineTo(p2.x + nx * capLen, p2.y + ny * capLen);
+      ctx.lineTo(p2.x - nx * capLen, p2.y - ny * capLen);
+      ctx.lineTo(p2.x - nx * capLen - dx * hookLen, p2.y - ny * capLen - dy * hookLen);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
     function renderFrame() {
       const sw = stageContainer.clientWidth;
       const sh = stageContainer.clientHeight;
@@ -1758,7 +1940,7 @@
           const labelTxt = `${item.label || 'Joint'} · ${deg.toFixed(1)}°`;
           drawCanvasPill(v.x + 16, v.y - 28, labelTxt, item.color, isSel);
 
-        } else if (item.type === 'scale') {
+        } else if (item.type === 'line') {
           const p1 = normToPixel(item.p1, box);
           const p2 = normToPixel(item.p2, box);
           ctx.beginPath();
@@ -1767,14 +1949,17 @@
           ctx.stroke();
 
           ctx.setLineDash([]);
-          drawRulerEndCaps(p1, p2, 8);
+          drawRulerEndCaps(p1, p2, 7);
           drawHandle(p1.x, p1.y, item.color, false, isSel);
           drawHandle(p2.x, p2.y, item.color, false, isSel);
 
+          const deg = `${computeLineDegrees(p1, p2).toFixed(1)}°`;
+          const calibratedDist = formatCalibratedDistance(item, box);
+          const readout = calibratedDist ? `${calibratedDist} · ${deg}` : `${deg} · (No scale)`;
+
           const midX = (p1.x + p2.x) / 2 + 10;
           const midY = (p1.y + p2.y) / 2 - 14;
-          const valTxt = `${item.label || 'Scale'} · ${item.knownValue || 1} ${item.unit || 'm'}`;
-          drawCanvasPill(midX, midY, valTxt, item.color, isSel);
+          drawCanvasPill(midX, midY, `${item.label} · ${readout}`, item.color, isSel);
 
         } else if (item.type === 'line') {
           const p1 = normToPixel(item.p1, box);
@@ -2050,8 +2235,9 @@
         } else if (item.type === 'scale') {
           readout = `${item.knownValue || 1} ${item.unit || 'm'}`;
         } else if (item.type === 'line') {
+          const deg = `${computeLineDegrees(normToPixel(item.p1, box), normToPixel(item.p2, box)).toFixed(1)}°`;
           const dist = formatCalibratedDistance(item, box);
-          readout = dist ? dist : `${computeLineDegrees(normToPixel(item.p1, box), normToPixel(item.p2, box)).toFixed(1)}°`;
+          readout = dist ? `${dist} · ${deg}` : `${deg} (No scale)`;
         } else if (item.type === 'plumb') {
           const deg = computeLineDegrees(normToPixel(item.p1, box), normToPixel(item.p2, box));
           readout = `${deg.toFixed(1)}°`;

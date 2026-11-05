@@ -52,7 +52,7 @@
       flex-direction: column;
     }
 
-    input[type="text"] {
+    input[type="text"], input[type="number"] {
       -webkit-user-select: text;
       user-select: text;
     }
@@ -277,11 +277,12 @@
       color: var(--text-primary);
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
       z-index: 25;
-      pointer-events: none;
+      pointer-events: auto;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
       transition: opacity 0.2s ease;
+      white-space: nowrap;
     }
 
     .prompt-dot {
@@ -289,6 +290,103 @@
       height: 8px;
       border-radius: 50%;
       background: var(--ios-blue);
+      flex-shrink: 0;
+    }
+
+    .prompt-action-btn {
+      background: rgba(10, 132, 255, 0.22);
+      border: 1px solid rgba(10, 132, 255, 0.5);
+      color: #64D2FF;
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .prompt-action-btn:active {
+      background: var(--ios-blue);
+      color: #FFFFFF;
+    }
+
+    /* Scale Calibration Modal Overlay */
+    .modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+    }
+
+    .modal-card {
+      width: 320px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-strong);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.65);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .modal-title {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+    }
+
+    .modal-sub {
+      font-size: 12.5px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+      margin-top: -6px;
+    }
+
+    .scale-input-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .unit-pills {
+      display: flex;
+      background: var(--input-bg);
+      border: 1px solid var(--border-subtle);
+      border-radius: 9px;
+      padding: 2px;
+      gap: 2px;
+    }
+
+    .unit-btn {
+      height: 34px;
+      padding: 0 10px;
+      border-radius: 7px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .unit-btn.active {
+      background: var(--ios-blue);
+      color: #FFFFFF;
+    }
+
+    .modal-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 2px;
     }
 
     /* Precision Magnifier Loupe */
@@ -726,6 +824,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 4 5 12l14 8"/><path d="M11 8.5a5.5 5.5 0 0 1 0 7"/><circle cx="5" cy="12" r="2"/></svg>
           <span>Angle</span>
         </button>
+        <button class="tool-btn" data-tool="ruler" onclick="selectTool('ruler')" title="Calibrated Distance Ruler">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2"/><path d="m11.5 9.5 2-2"/><path d="m8.5 6.5 2-2"/><path d="m17.5 15.5 2-2"/></svg>
+          <span>Ruler</span>
+        </button>
         <button class="tool-btn" data-tool="line" onclick="selectTool('line')" title="Straight Reference Line">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="19" x2="19" y2="5"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="5" r="2"/></svg>
           <span>Line</span>
@@ -793,13 +895,34 @@
 
       <!-- Contextual Instruction Pill -->
       <div id="promptBanner" class="prompt-banner">
-        <span class="prompt-dot"></span>
+        <span class="prompt-dot" id="promptDot"></span>
         <span id="promptText">Tap 1st limb point, then joint center (vertex), then 2nd limb point</span>
+        <button id="recalibratePromptBtn" class="prompt-action-btn" style="display:none" onclick="startScaleCalibration()">Recalibrate Scale</button>
       </div>
 
       <!-- Always-On Precision Magnifier Loupe -->
       <div id="loupeContainer">
         <canvas id="loupeCanvas" width="124" height="124"></canvas>
+      </div>
+
+      <!-- Scale Calibration Input Modal -->
+      <div id="scaleModalBackdrop" class="modal-backdrop">
+        <div class="modal-card" onclick="event.stopPropagation()">
+          <div class="modal-title">Set Scale Distance</div>
+          <div class="modal-sub">Enter the real-world length of the calibration line you just drew in the frame.</div>
+          <div class="scale-input-row">
+            <input type="number" id="modalScaleValueInput" class="text-input" style="padding-right:11px" step="any" min="0.001" value="1.0" placeholder="e.g. 1.0">
+            <div class="unit-pills">
+              <button type="button" class="unit-btn active" data-unit="m" onclick="selectModalUnit('m')">m</button>
+              <button type="button" class="unit-btn" data-unit="cm" onclick="selectModalUnit('cm')">cm</button>
+              <button type="button" class="unit-btn" data-unit="mm" onclick="selectModalUnit('mm')">mm</button>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="action-btn" onclick="cancelScaleModal()">Cancel</button>
+            <button type="button" class="action-btn primary" style="background:var(--ios-blue);color:#FFF;border-color:var(--ios-blue)" onclick="confirmScaleModal()">Apply Scale</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -818,9 +941,9 @@
             <span id="inspectorBadge" class="readout-badge">No Selection</span>
           </div>
 
-          <div>
-            <div class="section-label">Quick Joint Name</div>
-            <div class="preset-grid">
+          <div id="quickPresetsSection">
+            <div class="section-label" id="quickPresetTitle">Quick Joint Name</div>
+            <div class="preset-grid" id="quickPresetGrid">
               <button class="preset-chip" onclick="setQuickName('Hip')">Hip</button>
               <button class="preset-chip" onclick="setQuickName('Knee')">Knee</button>
               <button class="preset-chip" onclick="setQuickName('Ankle')">Ankle</button>
@@ -829,6 +952,19 @@
               <button class="preset-chip" onclick="setQuickName('Elbow')">Elbow</button>
               <button class="preset-chip" onclick="setQuickName('Neck')">Neck</button>
               <button class="preset-chip" onclick="setQuickName('Wrist')">Wrist</button>
+            </div>
+          </div>
+
+          <!-- Shown when the Scale calibration line is selected -->
+          <div id="inspectorScaleConfig" style="display:none">
+            <div class="section-label">Known Reference Distance</div>
+            <div class="scale-input-row">
+              <input type="number" id="inspectorScaleInput" class="text-input" style="padding-right:11px" step="any" min="0.001" oninput="onInspectorScaleInput(this.value)">
+              <div class="unit-pills">
+                <button type="button" class="unit-btn" data-ins-unit="m" onclick="setInspectorScaleUnit('m')">m</button>
+                <button type="button" class="unit-btn" data-ins-unit="cm" onclick="setInspectorScaleUnit('cm')">cm</button>
+                <button type="button" class="unit-btn" data-ins-unit="mm" onclick="setInspectorScaleUnit('mm')">mm</button>
+              </div>
             </div>
           </div>
 
@@ -841,9 +977,9 @@
           </div>
 
           <div class="card-actions">
-            <button class="action-btn" onclick="flipSelectedAngle()">
+            <button id="primaryCardActionBtn" class="action-btn" onclick="handlePrimaryCardAction()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2.1l4 4-4 4"/><path d="M3 12.2v-2a4 4 0 0 1 4-4h12.8M7 21.9l-4-4 4-4"/><path d="M21 11.8v2a4 4 0 0 1-4 4H4.2"/></svg>
-              <span>Flip 180°/360°</span>
+              <span id="primaryCardActionText">Flip 180°/360°</span>
             </button>
             <button class="action-btn danger" onclick="deleteSelectedAnnotation()" title="Delete Selected">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
@@ -909,13 +1045,18 @@
     let activeColor = '#30D158';
     let isDashed = false;
 
+    // Bundled Ruler / Scale sub-state
+    let rulerSubMode = 'calibrate'; // 'calibrate' | 'measure'
+    let modalScaleUnit = 'm';
+    let pendingScaleItemId = null;
+
     let annotations = [];
     let selectedId = null;
     let pendingAnglePts = []; // [p1, vertex] while building a 3-point angle
     let cursorPos = null;
 
     // Drag interaction state
-    let dragState = null; // { type: 'handle'|'create'|'pen'|'move-all', item, handleKey, startPt }
+    let dragState = null; // { type: 'handle'|'create'|'pen', item, handleKey }
 
     const STEP_DT = 1 / 60; // Smooth 60Hz single-frame step
 
@@ -980,10 +1121,20 @@
       };
     }
 
+    function getScaleAnnotation() {
+      return annotations.find(a => a.type === 'scale') || null;
+    }
+
     // Tool & UI Controls
     function selectTool(tool) {
       activeTool = tool;
       pendingAnglePts = [];
+
+      if (tool === 'ruler') {
+        const existingScale = getScaleAnnotation();
+        rulerSubMode = existingScale ? 'measure' : 'calibrate';
+      }
+
       document.querySelectorAll('.tool-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.tool === tool);
       });
@@ -991,12 +1142,37 @@
       renderFrame();
     }
 
+    function startScaleCalibration() {
+      activeTool = 'ruler';
+      rulerSubMode = 'calibrate';
+      document.querySelectorAll('.tool-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tool === 'ruler');
+      });
+      updatePromptBanner();
+      renderFrame();
+    }
+
     function updatePromptBanner() {
       const textEl = document.getElementById('promptText');
+      const dotEl = document.getElementById('promptDot');
+      const recalBtn = document.getElementById('recalibratePromptBtn');
+      recalBtn.style.display = 'none';
+      dotEl.style.background = 'var(--ios-blue)';
+
       if (activeTool === 'angle') {
         if (pendingAnglePts.length === 0) textEl.textContent = 'Angle: Tap 1st limb landmark';
         else if (pendingAnglePts.length === 1) textEl.textContent = 'Angle: Tap Joint Center (Vertex)';
         else if (pendingAnglePts.length === 2) textEl.textContent = 'Angle: Tap 2nd limb landmark';
+      } else if (activeTool === 'ruler') {
+        const scaleObj = getScaleAnnotation();
+        if (rulerSubMode === 'calibrate' || !scaleObj) {
+          dotEl.style.background = 'var(--ios-cyan)';
+          textEl.textContent = 'Step 1 of 2 (Scale): Touch and drag across a known reference length in the frame';
+        } else {
+          dotEl.style.background = 'var(--ios-green)';
+          textEl.textContent = `Ruler (${scaleObj.knownValue} ${scaleObj.unit} scale): Touch and drag to measure distance`;
+          recalBtn.style.display = 'inline-block';
+        }
       } else if (activeTool === 'line') {
         textEl.textContent = 'Line: Touch and drag across two landmarks';
       } else if (activeTool === 'plumb') {
@@ -1042,6 +1218,66 @@
       document.getElementById('sidebarToggleBtn').classList.toggle('active-toggle', !sidebar.classList.contains('collapsed'));
       setTimeout(resizeStage, 250);
     }
+
+    // Scale Calibration Modal Controls
+    function openScaleModal(scaleItem) {
+      pendingScaleItemId = scaleItem.id;
+      const input = document.getElementById('modalScaleValueInput');
+      input.value = scaleItem.knownValue || 1.0;
+      selectModalUnit(scaleItem.unit || 'm');
+      document.getElementById('scaleModalBackdrop').style.display = 'flex';
+      setTimeout(() => {
+        input.focus();
+        input.select();
+      }, 60);
+    }
+
+    function selectModalUnit(unit) {
+      modalScaleUnit = unit;
+      document.querySelectorAll('#scaleModalBackdrop .unit-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.unit === unit);
+      });
+    }
+
+    function confirmScaleModal() {
+      const rawVal = parseFloat(document.getElementById('modalScaleValueInput').value);
+      const validVal = (!isNaN(rawVal) && rawVal > 0) ? rawVal : 1.0;
+      const scaleItem = annotations.find(a => a.id === pendingScaleItemId) || getScaleAnnotation();
+      if (scaleItem) {
+        scaleItem.knownValue = validVal;
+        scaleItem.unit = modalScaleUnit;
+        scaleItem.label = 'Scale';
+        selectedId = scaleItem.id;
+      }
+      document.getElementById('scaleModalBackdrop').style.display = 'none';
+      pendingScaleItemId = null;
+      rulerSubMode = 'measure';
+      updatePromptBanner();
+      syncInspectorUI();
+      renderFrame();
+    }
+
+    function cancelScaleModal() {
+      if (pendingScaleItemId) {
+        const item = annotations.find(a => a.id === pendingScaleItemId);
+        if (item && !item.confirmed) {
+          annotations = annotations.filter(a => a.id !== pendingScaleItemId);
+          if (selectedId === pendingScaleItemId) {
+            selectedId = annotations.length ? annotations[annotations.length - 1].id : null;
+          }
+        }
+      }
+      document.getElementById('scaleModalBackdrop').style.display = 'none';
+      pendingScaleItemId = null;
+      rulerSubMode = getScaleAnnotation() ? 'measure' : 'calibrate';
+      updatePromptBanner();
+      syncInspectorUI();
+      renderFrame();
+    }
+
+    document.getElementById('modalScaleValueInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') confirmScaleModal();
+    });
 
     // Video upload & playback
     function handleVideoUpload(e) {
@@ -1160,6 +1396,24 @@
       return Math.abs(deg);
     }
 
+    function computePixelLength(item, box) {
+      const p1 = normToPixel(item.p1, box);
+      const p2 = normToPixel(item.p2, box);
+      return Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    }
+
+    function formatCalibratedDistance(item, box) {
+      const scaleObj = getScaleAnnotation();
+      const itemPx = computePixelLength(item, box);
+      if (!scaleObj) {
+        return `${Math.round(itemPx)} px`;
+      }
+      const scalePx = Math.max(1e-4, computePixelLength(scaleObj, box));
+      const realDist = (itemPx / scalePx) * (scaleObj.knownValue || 1);
+      const decimals = scaleObj.unit === 'mm' ? 1 : 2;
+      return `${realDist.toFixed(decimals)} ${scaleObj.unit || 'm'}`;
+    }
+
     function getSelectedAnnotation() {
       return annotations.find(a => a.id === selectedId) || null;
     }
@@ -1190,7 +1444,14 @@
           if (Math.hypot(pt.x - (vp.x + 42), pt.y - (vp.y - 18)) <= 36) {
             return { item, handleKey: 'vertex' };
           }
-        } else if (item.type === 'line' || item.type === 'plumb' || item.type === 'arrow' || item.type === 'circle') {
+        } else if (
+          item.type === 'line' ||
+          item.type === 'plumb' ||
+          item.type === 'arrow' ||
+          item.type === 'circle' ||
+          item.type === 'scale' ||
+          item.type === 'ruler'
+        ) {
           for (const k of ['p1', 'p2']) {
             const hp = normToPixel(item[k], box);
             if (Math.hypot(pt.x - hp.x, pt.y - hp.y) <= hitRadius) {
@@ -1246,11 +1507,56 @@
           annotations.push(newAngle);
           selectedId = newAngle.id;
           pendingAnglePts = [];
-          // Allow immediate fine-tuning of the 3rd point while holding pointer down
           dragState = { type: 'handle', item: newAngle, handleKey: 'p3' };
           syncInspectorUI();
         }
         updatePromptBanner();
+        renderFrame();
+      } else if (activeTool === 'ruler') {
+        const existingScale = getScaleAnnotation();
+        if (rulerSubMode === 'calibrate' || !existingScale) {
+          // Remove previous scale line if recalibrating
+          const prevVal = existingScale ? existingScale.knownValue : 1.0;
+          const prevUnit = existingScale ? existingScale.unit : 'm';
+          annotations = annotations.filter(a => a.type !== 'scale');
+
+          const newScale = {
+            id: 'scale_' + Date.now(),
+            type: 'scale',
+            label: 'Scale',
+            color: '#64D2FF',
+            dashed: true,
+            knownValue: prevVal,
+            unit: prevUnit,
+            confirmed: false,
+            p1: { ...normPt },
+            p2: {
+              nx: Math.min(1, normPt.nx + 0.05),
+              ny: normPt.ny
+            }
+          };
+          annotations.push(newScale);
+          selectedId = newScale.id;
+          dragState = { type: 'create-scale', item: newScale, handleKey: 'p2' };
+        } else {
+          const distCount = annotations.filter(a => a.type === 'ruler').length + 1;
+          const newRuler = {
+            id: 'rul_' + Date.now(),
+            type: 'ruler',
+            label: `Distance ${distCount}`,
+            color: activeColor,
+            dashed: isDashed,
+            p1: { ...normPt },
+            p2: {
+              nx: Math.min(1, normPt.nx + 0.04),
+              ny: Math.min(1, normPt.ny + 0.04)
+            }
+          };
+          annotations.push(newRuler);
+          selectedId = newRuler.id;
+          dragState = { type: 'create', item: newRuler, handleKey: 'p2' };
+        }
+        syncInspectorUI();
         renderFrame();
       } else if (activeTool === 'line' || activeTool === 'plumb' || activeTool === 'arrow' || activeTool === 'circle') {
         const labelMap = { line: 'Line', plumb: 'Plumb', arrow: 'Vector', circle: 'Marker' };
@@ -1297,7 +1603,7 @@
       if (dragState) {
         showLoupeAt(pt);
         const item = dragState.item;
-        if (dragState.type === 'handle' || dragState.type === 'create') {
+        if (dragState.type === 'handle' || dragState.type === 'create' || dragState.type === 'create-scale') {
           if (item.type === 'plumb') {
             const p1Px = normToPixel(item.p1, box);
             const dx = Math.abs(pt.x - p1Px.x);
@@ -1322,11 +1628,17 @@
     });
 
     function endPointerInteraction() {
+      const finishedDrag = dragState;
       dragState = null;
       if (pendingAnglePts.length === 0) {
         loupeContainer.style.display = 'none';
       }
       renderFrame();
+
+      if (finishedDrag && finishedDrag.type === 'create-scale' && finishedDrag.item) {
+        finishedDrag.item.confirmed = true;
+        openScaleModal(finishedDrag.item);
+      }
     }
 
     canvas.addEventListener('pointerup', endPointerInteraction);
@@ -1335,7 +1647,6 @@
     // Always-On Precision Loupe
     function showLoupeAt(pt) {
       loupeContainer.style.display = 'block';
-      // Flip loupe to right corner if finger/pencil is in upper-left quadrant
       if (pt.x < 220 && pt.y < 220) {
         loupeContainer.classList.add('right-side');
       } else {
@@ -1355,7 +1666,6 @@
       loupeCtx.fillStyle = '#000';
       loupeCtx.fillRect(0, 0, size, size);
 
-      // Copy zoomed region directly from mainCanvas (which already has video + vector overlay)
       loupeCtx.drawImage(
         canvas,
         cursorPos.x * dpr - srcRadius / 2,
@@ -1388,11 +1698,9 @@
     // Synthetic Reference Figure (when no video file is loaded yet)
     function drawDemoFigure(box) {
       ctx.save();
-      // Subtle studio background inside video frame
       ctx.fillStyle = '#0D0D10';
       ctx.fillRect(box.x, box.y, box.w, box.h);
 
-      // Subtle reference grid
       ctx.strokeStyle = 'rgba(255,255,255,0.04)';
       ctx.lineWidth = 1;
       const step = box.w / 16;
@@ -1403,7 +1711,6 @@
         ctx.beginPath(); ctx.moveTo(box.x, y); ctx.lineTo(box.x + box.w, y); ctx.stroke();
       }
 
-      // Smooth squat/jump kinematic cycle
       const phase = Math.sin(demoTime * Math.PI * 2);
       const crouch = Math.max(0, phase) * 0.14;
       const flight = Math.max(0, -phase) * 0.12;
@@ -1417,7 +1724,6 @@
       const wrist = { x: elbow.x + box.w * 0.07, y: elbow.y + box.h * 0.08 };
       const toe = { x: ankle.x + box.w * 0.07, y: ankle.y + box.h * 0.02 };
 
-      // Segments
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
       ctx.lineWidth = 8;
       ctx.lineCap = 'round';
@@ -1433,7 +1739,6 @@
       ctx.lineTo(wrist.x, wrist.y);
       ctx.stroke();
 
-      // Head
       ctx.beginPath();
       ctx.arc(ear.x, ear.y, box.h * 0.045, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
@@ -1441,7 +1746,6 @@
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // Anatomical markers
       [toe, ankle, knee, hip, shoulder, elbow, wrist].forEach(pt => {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
@@ -1453,6 +1757,19 @@
       });
 
       ctx.restore();
+    }
+
+    // Helper to draw perpendicular end-cap ticks on Scale & Ruler lines
+    function drawRulerEndCaps(p1, p2, capLen = 8) {
+      const ang = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+      const nx = -Math.sin(ang) * capLen;
+      const ny = Math.cos(ang) * capLen;
+      ctx.beginPath();
+      ctx.moveTo(p1.x - nx, p1.y - ny);
+      ctx.lineTo(p1.x + nx, p1.y + ny);
+      ctx.moveTo(p2.x - nx, p2.y - ny);
+      ctx.lineTo(p2.x + nx, p2.y + ny);
+      ctx.stroke();
     }
 
     // Main Canvas Render
@@ -1486,14 +1803,12 @@
           const v = normToPixel(item.vertex, box);
           const p3 = normToPixel(item.p3, box);
 
-          // Limbs
           ctx.beginPath();
           ctx.moveTo(p1.x, p1.y);
           ctx.lineTo(v.x, v.y);
           ctx.lineTo(p3.x, p3.y);
           ctx.stroke();
 
-          // Interior / Reflex Arc
           ctx.setLineDash([]);
           const a1 = Math.atan2(p1.y - v.y, p1.x - v.x);
           const a2 = Math.atan2(p3.y - v.y, p3.x - v.x);
@@ -1514,15 +1829,49 @@
           ctx.lineWidth = 2;
           ctx.stroke();
 
-          // Endpoints & Double-ring Vertex
           drawHandle(p1.x, p1.y, item.color, false, isSel);
           drawHandle(p3.x, p3.y, item.color, false, isSel);
           drawHandle(v.x, v.y, item.color, true, isSel);
 
-          // Pill Readout Badge
           const deg = computeAngleDegrees(p1, v, p3, item.reflex);
           const labelTxt = `${item.label || 'Joint'} · ${deg.toFixed(1)}°`;
           drawCanvasPill(v.x + 16, v.y - 28, labelTxt, item.color, isSel);
+
+        } else if (item.type === 'scale') {
+          const p1 = normToPixel(item.p1, box);
+          const p2 = normToPixel(item.p2, box);
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
+
+          ctx.setLineDash([]);
+          drawRulerEndCaps(p1, p2, 9);
+          drawHandle(p1.x, p1.y, item.color, false, isSel);
+          drawHandle(p2.x, p2.y, item.color, false, isSel);
+
+          const midX = (p1.x + p2.x) / 2 + 10;
+          const midY = (p1.y + p2.y) / 2 - 14;
+          const valTxt = `${item.label || 'Scale'} · ${item.knownValue || 1} ${item.unit || 'm'}`;
+          drawCanvasPill(midX, midY, valTxt, item.color, isSel);
+
+        } else if (item.type === 'ruler') {
+          const p1 = normToPixel(item.p1, box);
+          const p2 = normToPixel(item.p2, box);
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
+
+          ctx.setLineDash([]);
+          drawRulerEndCaps(p1, p2, 8);
+          drawHandle(p1.x, p1.y, item.color, false, isSel);
+          drawHandle(p2.x, p2.y, item.color, false, isSel);
+
+          const distTxt = formatCalibratedDistance(item, box);
+          const midX = (p1.x + p2.x) / 2 + 10;
+          const midY = (p1.y + p2.y) / 2 - 14;
+          drawCanvasPill(midX, midY, `${item.label || 'Distance'} · ${distTxt}`, item.color, isSel);
 
         } else if (item.type === 'line' || item.type === 'plumb') {
           const p1 = normToPixel(item.p1, box);
@@ -1662,7 +2011,13 @@
       const valEl = document.getElementById('inspectorValue');
       const badgeEl = document.getElementById('inspectorBadge');
       const inputEl = document.getElementById('labelInput');
+      const scaleConfigEl = document.getElementById('inspectorScaleConfig');
+      const scaleInputEl = document.getElementById('inspectorScaleInput');
+      const primaryActionText = document.getElementById('primaryCardActionText');
       const box = getVideoBox();
+
+      scaleConfigEl.style.display = 'none';
+      primaryActionText.textContent = 'Flip 180°/360°';
 
       if (sel) {
         valEl.style.color = sel.color;
@@ -1678,6 +2033,21 @@
           );
           valEl.textContent = `${deg.toFixed(1)}°`;
           badgeEl.textContent = sel.reflex ? 'Reflex (>180°)' : 'Interior';
+        } else if (sel.type === 'scale') {
+          valEl.textContent = `${sel.knownValue || 1} ${sel.unit || 'm'}`;
+          badgeEl.textContent = 'Scale Reference';
+          scaleConfigEl.style.display = 'block';
+          if (document.activeElement !== scaleInputEl) {
+            scaleInputEl.value = sel.knownValue || 1;
+          }
+          document.querySelectorAll('[data-ins-unit]').forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-ins-unit') === (sel.unit || 'm'));
+          });
+          primaryActionText.textContent = 'Redraw Scale';
+        } else if (sel.type === 'ruler') {
+          valEl.textContent = formatCalibratedDistance(sel, box);
+          badgeEl.textContent = 'Calibrated Ruler';
+          primaryActionText.textContent = 'Recalibrate Scale';
         } else if (sel.type === 'line' || sel.type === 'plumb') {
           const deg = computeLineDegrees(normToPixel(sel.p1, box), normToPixel(sel.p2, box));
           valEl.textContent = `${deg.toFixed(1)}°`;
@@ -1693,7 +2063,6 @@
         inputEl.value = '';
       }
 
-      // Highlight matching quick-name chip
       document.querySelectorAll('.preset-chip').forEach(chip => {
         chip.classList.toggle('active', sel && sel.label === chip.textContent);
       });
@@ -1701,10 +2070,43 @@
       renderMeasurementsList(box);
     }
 
+    function onInspectorScaleInput(val) {
+      const sel = getSelectedAnnotation();
+      if (!sel || sel.type !== 'scale') return;
+      const num = parseFloat(val);
+      if (!isNaN(num) && num > 0) {
+        sel.knownValue = num;
+        updatePromptBanner();
+        syncInspectorUI();
+        renderFrame();
+      }
+    }
+
+    function setInspectorScaleUnit(unit) {
+      const sel = getSelectedAnnotation();
+      if (!sel || sel.type !== 'scale') return;
+      sel.unit = unit;
+      updatePromptBanner();
+      syncInspectorUI();
+      renderFrame();
+    }
+
+    function handlePrimaryCardAction() {
+      const sel = getSelectedAnnotation();
+      if (!sel) return;
+      if (sel.type === 'angle') {
+        sel.reflex = !sel.reflex;
+        syncInspectorUI();
+        renderFrame();
+      } else if (sel.type === 'scale' || sel.type === 'ruler') {
+        startScaleCalibration();
+      }
+    }
+
     function renderMeasurementsList(box) {
       const listEl = document.getElementById('measurementsList');
       if (annotations.length === 0) {
-        listEl.innerHTML = '<div class="empty-state">Tap 3 points on the video to measure a joint angle, or drag to draw a reference line.</div>';
+        listEl.innerHTML = '<div class="empty-state">Tap 3 points on the video to measure a joint angle, or tap Ruler to calibrate scale and measure distances.</div>';
         return;
       }
 
@@ -1718,6 +2120,10 @@
             item.reflex
           );
           readout = `${deg.toFixed(1)}°`;
+        } else if (item.type === 'scale') {
+          readout = `${item.knownValue || 1} ${item.unit || 'm'}`;
+        } else if (item.type === 'ruler') {
+          readout = formatCalibratedDistance(item, box);
         } else if (item.type === 'line' || item.type === 'plumb') {
           const deg = computeLineDegrees(normToPixel(item.p1, box), normToPixel(item.p2, box));
           readout = `${deg.toFixed(1)}°`;
@@ -1750,6 +2156,10 @@
       if (selectedId === id) {
         selectedId = annotations.length ? annotations[annotations.length - 1].id : null;
       }
+      if (activeTool === 'ruler' && !getScaleAnnotation()) {
+        rulerSubMode = 'calibrate';
+      }
+      updatePromptBanner();
       syncInspectorUI();
       renderFrame();
     }
@@ -1771,15 +2181,6 @@
       renderFrame();
     }
 
-    function flipSelectedAngle() {
-      const sel = getSelectedAnnotation();
-      if (sel && sel.type === 'angle') {
-        sel.reflex = !sel.reflex;
-        syncInspectorUI();
-        renderFrame();
-      }
-    }
-
     function deleteSelectedAnnotation() {
       if (!selectedId) return;
       removeAnnotationById(selectedId);
@@ -1794,6 +2195,10 @@
       }
       annotations.pop();
       selectedId = annotations.length ? annotations[annotations.length - 1].id : null;
+      if (activeTool === 'ruler' && !getScaleAnnotation()) {
+        rulerSubMode = 'calibrate';
+      }
+      updatePromptBanner();
       syncInspectorUI();
       renderFrame();
     }
@@ -1802,6 +2207,9 @@
       annotations = [];
       pendingAnglePts = [];
       selectedId = null;
+      if (activeTool === 'ruler') {
+        rulerSubMode = 'calibrate';
+      }
       syncInspectorUI();
       updatePromptBanner();
       renderFrame();

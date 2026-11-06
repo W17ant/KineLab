@@ -1090,7 +1090,9 @@
      * Why +1e-4: currentTime carries float noise after a seek; frame n must never round to n-1.
      */
     function currentFrameIndex() {
-      return Math.floor(video.currentTime * getVideoFps() + 1e-4);
+      // Why clamp: at the end of a clip the browser parks currentTime on the duration itself,
+      // which would otherwise read as one frame past the last real frame.
+      return Math.min(totalFrames() - 1, Math.floor(video.currentTime * getVideoFps() + 1e-4));
     }
 
     function totalFrames() {
@@ -1458,11 +1460,24 @@
       const url = URL.createObjectURL(file);
       video.src = url;
       video.load();
+      // Why: browsers only decode H.264/HEVC/VP9/AV1. Exports from older analysis software
+      // (MPEG-4 Part 2 / DivX, WMV) fail silently otherwise, leaving the demo figure on screen
+      // with no hint why — so say so in the prompt banner.
+      video.onerror = () => {
+        hasLoadedVideo = false;
+        document.getElementById('promptDot').style.background = 'var(--ios-red)';
+        document.getElementById('promptText').textContent =
+          `Couldn't open "${file.name}": this browser can't decode its video codec. Convert it to H.264 MP4 and try again.`;
+        updatePlayIcon();
+        updateScrubberUI();
+        renderFrame();
+      };
       video.onloadeddata = () => {
         hasLoadedVideo = true;
         video.currentTime = 0;
         video.pause();
         updatePlayIcon();
+        updatePromptBanner(); // clears a codec error left by a previous failed load
         updateScrubberUI();
         resizeStage();
         probeVideoFps();
@@ -1546,7 +1561,8 @@
       });
       const input = document.getElementById('fpsInput');
       if (document.activeElement !== input) input.value = fpsOverride ? fpsOverride : '';
-      input.placeholder = detectedFps ? `Auto (${detectedFps} fps detected)` : `Auto (${DEFAULT_FPS} fps assumed)`;
+      // "~" marks an assumed rate; keep it short so it isn't clipped in the 150 px input.
+      input.placeholder = detectedFps ? `Auto (${detectedFps} fps)` : `Auto (~${DEFAULT_FPS} fps)`;
     }
 
     function togglePlayback() {

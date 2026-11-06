@@ -862,6 +862,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         <span>Open Video</span>
       </button>
+      <button id="advancedToggleBtn" class="action-btn" onclick="toggleAdvanced()" title="Show advanced analysis tools">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+        <span>Advanced</span>
+      </button>
       <button id="sidebarToggleBtn" class="action-btn active-toggle" onclick="toggleSidebar()" title="Toggle Inspector Sidebar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
       </button>
@@ -1020,6 +1024,9 @@
           </div>
         </div>
 
+        <!-- Advanced analysis: each module in the Advanced block appends its own section here (shown only in Advanced mode) -->
+        <div id="advancedPanel" data-adv style="display:none; flex-direction:column; gap:16px"></div>
+
         <!-- Measurements List -->
         <div>
           <div class="section-label">Measurements on Frame</div>
@@ -1088,6 +1095,128 @@
     let cursorPos = null;
 
     let dragState = null;
+
+    // ---- KL: extension API for the Advanced feature modules ------------------------------------
+    // Why an API instead of editing the core per feature: the advanced features live in their own
+    // <script> blocks below the core, and the core only exposes hooks. Basic mode never calls into
+    // them, so the standard app behaves exactly as before when Advanced is off.
+    //
+    // Events (KL.on(name, fn)):
+    //   'render'      { ctx, box }  after markups are drawn, before the loupe (overlays, graphs)
+    //   'renderVideo' { ctx, box }  right after the video frame is drawn, before markups
+    //   'frame'       { frame }     after a seek lands on a frame
+    //   'videoload'   { name, width, height, duration }
+    //   'reset'       {}            a new clip was opened or failed; drop per-clip data
+    //   'change'      { prev, next } serialized state changed (see commit)
+    //   'csv'         { rows, box } push extra 10-column rows into the measurements CSV
+    //   'advanced'    { on }        Advanced mode switched
+    // Registries:
+    //   KL.types[type] = { handleKeys(item)->keys, render(item, ctx, box, isSel), hitBody(item, pt, box, dist)->bool,
+    //                      readout(item, box)->{value, badge, list}, csv(item, box)->{value, unit, tilt, notes},
+    //                      clean(raw, out)->bool }
+    //   KL.tools[name] = { onDown({e, rawPt, pt, normPt, box}), onMove({..., drag}), onUp({drag}), capturesAll, prompt }
+    //                      A tool starts a drag with KL.startDrag({...}); its button needs data-tool="name".
+    //   KL.session[key] = { save()->json|null, load(json|null, ctx), undoable }  extra data in session files
+    //   KL.lengthOverride(p1, p2, box)->{value, unit}|null   replaces scale-based calibration
+    //   KL.undoOverride()->bool                               replaces the Undo button when it returns true
+    const COMMIT_POLL_MS = 250; // Why 250 ms: fast enough that undo/autosave feel immediate, cheap to serialize
+    let lastCommitCheck = 0;
+    let lastCommittedState = null;
+    const KL = window.KL = {
+      advanced: false,
+      view: { zoom: 1, panX: 0, panY: 0, mirror: false, reserveRight: 0 },
+      modules: {},     // public APIs modules expose to each other, e.g. KL.modules.tracking
+      types: {},
+      tools: {},
+      session: {},
+      lengthOverride: null,
+      undoOverride: null,
+      listeners: {},
+      panel: null,     // #advancedPanel, set at startup
+      toolbar: null,   // the tool pill; advanced tool buttons are appended with data-adv
+      on(name, fn) { (this.listeners[name] = this.listeners[name] || []).push(fn); },
+      emit(name, payload) {
+        for (const fn of this.listeners[name] || []) {
+          try { fn(payload); } catch (err) { console.error(`KineLab module error in '${name}':`, err); }
+        }
+      },
+      // State access for modules (the core keeps these as script-level variables).
+      get annotations() { return annotations; },
+      set annotations(v) { annotations = v; },
+      get bookmarks() { return bookmarks; },
+      set bookmarks(v) { bookmarks = v; },
+      get selectedId() { return selectedId; },
+      set selectedId(v) { selectedId = v; },
+      get activeTool() { return activeTool; },
+      get activeColor() { return activeColor; },
+      get isDashed() { return isDashed; },
+      get hasVideo() { return hasLoadedVideo; },
+      get video() { return video; },
+      get canvas() { return canvas; },
+      get ctx() { return ctx; },
+      get stage() { return stageContainer; },
+      get videoName() { return currentVideoName; },
+      get dragging() { return !!dragState; },
+      startDrag(state) { dragState = { ...state, type: 'custom', tool: state.tool || activeTool }; },
+      /** Snapshot of everything undo/autosave cares about. */
+      snapshot() {
+        const extras = {};
+        for (const [k, m] of Object.entries(this.session)) if (m.undoable) extras[k] = m.save();
+        return JSON.stringify({ annotations, bookmarks, extras });
+      },
+      /** Restore a snapshot() string (used by undo/redo and autosave restore). */
+      restore(snap) {
+        const s = JSON.parse(snap);
+        annotations = s.annotations || [];
+        bookmarks = s.bookmarks || [];
+        for (const [k, m] of Object.entries(this.session)) if (m.undoable) m.load(s.extras ? s.extras[k] ?? null : null, { bookmarkIds: new Set(bookmarks.map(b => b.id)) });
+        if (selectedId && !annotations.some(a => a.id === selectedId)) selectedId = null;
+        lastCommittedState = this.snapshot();
+        syncBookmarkUI(true);
+        syncInspectorUI();
+        updateScrubberUI();
+        renderFrame();
+      },
+      /** Emit 'change' if the state differs from the last commit. Safe to call often. */
+      commit() {
+        if (dragState) return;
+        const next = this.snapshot();
+        if (lastCommittedState === null) { lastCommittedState = next; return; }
+        if (next === lastCommittedState) return;
+        const prev = lastCommittedState;
+        lastCommittedState = next;
+        this.emit('change', { prev, next });
+      },
+      resetCommitBaseline() { lastCommittedState = this.snapshot(); },
+      isTextEntry(el) {
+        const tag = el ? el.tagName : '';
+        return tag === 'TEXTAREA' || tag === 'SELECT' || (tag === 'INPUT' && el.type !== 'range');
+      },
+      // Core helpers modules may call.
+      get fns() {
+        return {
+          getVideoBox, normToPixel, pixelToNorm, computeAngleDegrees, computeLineDegrees, computePixelLength,
+          calibratedLength, formatCalibratedDistance, getActiveScale, currentFrameIndex, totalFrames, seekToFrame,
+          getVideoFps, activeBookmark, bookmarkFrame, jumpToBookmark, visibleAnnotations, isAnnotationVisible,
+          bookmarkIdForNewItem, showBanner, renderFrame, syncInspectorUI, syncBookmarkUI, updateScrubberUI,
+          updatePromptBanner, updatePlayIcon, selectTool, escapeHtml, downloadBlob, exportBaseName, drawHandle,
+          drawCanvasPill, distToSegment, csvField, resizeStage
+        };
+      }
+    };
+
+    /** Show or hide everything marked data-adv, and tell modules. Remembered per browser. */
+    function toggleAdvanced(force) {
+      KL.advanced = typeof force === 'boolean' ? force : !KL.advanced;
+      document.getElementById('advancedToggleBtn').classList.toggle('active-toggle', KL.advanced);
+      document.querySelectorAll('[data-adv]').forEach(el => {
+        el.style.display = KL.advanced ? (el.dataset.advDisplay || (el.id === 'advancedPanel' ? 'flex' : '')) : 'none';
+      });
+      if (!KL.advanced && KL.tools[activeTool]) selectTool('angle'); // advanced tools vanish with the mode
+      try { localStorage.setItem('kinelab.advanced', KL.advanced ? '1' : '0'); } catch (err) { /* private mode */ }
+      KL.emit('advanced', { on: KL.advanced });
+      renderFrame();
+    }
 
     const STEP_DT = 1 / 60; // Demo-figure only: the built-in animation is modelled at 60 fps
     const DEMO_DURATION = 2.5; // Seconds per loop of the demo figure; demoTime is 0..1 of this
@@ -1207,31 +1336,40 @@
     }
 
     function getVideoBox() {
-      const sw = stageContainer.clientWidth || 800;
+      // reserveRight: fraction of the stage width kept free on the right (side-by-side compare).
+      const sw = (stageContainer.clientWidth || 800) * (1 - (KL.view.reserveRight || 0));
       const sh = stageContainer.clientHeight || 500;
       const vw = hasLoadedVideo && video.videoWidth ? video.videoWidth : 1280;
       const vh = hasLoadedVideo && video.videoHeight ? video.videoHeight : 720;
       const scale = Math.min(sw / vw, sh / vh);
-      const w = vw * scale;
-      const h = vh * scale;
+      // Why the view zoom/pan lives here: every markup is stored in normalized video
+      // coordinates and drawn through this box, so zooming the box zooms the picture and all
+      // markups together, and length ratios (calibration) are unchanged.
+      const view = KL.view;
+      const w = vw * scale * view.zoom;
+      const h = vh * scale * view.zoom;
       return {
-        x: (sw - w) / 2,
-        y: (sh - h) / 2,
+        x: (sw - w) / 2 + view.panX,
+        y: (sh - h) / 2 + view.panY,
         w,
         h
       };
     }
 
+    // Why mirroring is applied in the coordinate mapping: flipping only the picture would leave
+    // markups pointing at the wrong side of the body. Angles and lengths are unaffected.
     function normToPixel(pt, box) {
+      const nx = KL.view.mirror ? 1 - pt.nx : pt.nx;
       return {
-        x: box.x + pt.nx * box.w,
+        x: box.x + nx * box.w,
         y: box.y + pt.ny * box.h
       };
     }
 
     function pixelToNorm(x, y, box) {
+      const nx = Math.max(0, Math.min(1, (x - box.x) / (box.w || 1)));
       return {
-        nx: Math.max(0, Math.min(1, (x - box.x) / (box.w || 1))),
+        nx: KL.view.mirror ? 1 - nx : nx,
         ny: Math.max(0, Math.min(1, (y - box.y) / (box.h || 1)))
       };
     }
@@ -1476,6 +1614,13 @@
           if (Math.hypot(pt.x - (vp.x + 42), pt.y - (vp.y - 18)) <= 36) {
             return { item, handleKey: 'vertex' };
           }
+        } else if (KL.types[item.type]) {
+          for (const k of handleKeysOf(item)) {
+            const hp = normToPixel(item[k], box);
+            if (Math.hypot(pt.x - hp.x, pt.y - hp.y) <= hitRadius) {
+              return { item, handleKey: k };
+            }
+          }
         } else if (
           item.type === 'line' ||
           item.type === 'plumb' ||
@@ -1500,7 +1645,10 @@
       for (let i = annotations.length - 1; i >= 0; i--) {
         const item = annotations[i];
         if (!isAnnotationVisible(item)) continue; // hidden markups must not catch the pointer
-        if (item.type === 'angle') {
+        if (KL.types[item.type]) {
+          const t = KL.types[item.type];
+          if (t.hitBody && t.hitBody(item, pt, box, hitDist)) return item;
+        } else if (item.type === 'angle') {
           const p1 = normToPixel(item.p1, box);
           const v = normToPixel(item.vertex, box);
           const p3 = normToPixel(item.p3, box);
@@ -1531,14 +1679,26 @@
       return null;
     }
 
+    /** Keys of an item's draggable point handles (custom types declare their own). */
+    function handleKeysOf(item) {
+      const t = KL.types[item.type];
+      if (t) return t.handleKeys ? t.handleKeys(item) : [];
+      if (item.type === 'angle') return ['p1', 'vertex', 'p3'];
+      if (item.type === 'pen') return [];
+      return ['p1', 'p2'];
+    }
+
+    /** Copy of every point an item owns, keyed as on the item (pen/point lists under `points`). */
     function cloneItemCoords(item) {
-      if (item.type === 'angle') {
-        return { p1: { ...item.p1 }, vertex: { ...item.vertex }, p3: { ...item.p3 } };
-      } else if (item.type === 'pen') {
-        return { points: item.points.map(p => ({ ...p })) };
-      } else {
-        return { p1: { ...item.p1 }, p2: { ...item.p2 } };
-      }
+      const out = {};
+      for (const k of handleKeysOf(item)) out[k] = { ...item[k] };
+      if (Array.isArray(item.points)) out.points = item.points.map(p => ({ ...p }));
+      return out;
+    }
+
+    /** Flat list of all points in a clone from cloneItemCoords. */
+    function coordsPoints(coords) {
+      return Object.entries(coords).flatMap(([k, v]) => k === 'points' ? v : [v]);
     }
 
     // Keyboard Controls: Play/Pause and Frame Stepping
@@ -1588,7 +1748,10 @@
       const dotEl = document.getElementById('promptDot');
       dotEl.style.background = 'var(--ios-blue)';
 
-      if (activeTool === 'angle') {
+      if (KL.tools[activeTool]) {
+        const p = KL.tools[activeTool].prompt;
+        textEl.textContent = typeof p === 'function' ? p() : (p || '');
+      } else if (activeTool === 'angle') {
         if (pendingAnglePts.length === 0) textEl.textContent = 'Angle: Tap 1st limb landmark';
         else if (pendingAnglePts.length === 1) textEl.textContent = 'Angle: Tap Joint Center (Vertex)';
         else if (pendingAnglePts.length === 2) textEl.textContent = 'Angle: Tap 2nd limb landmark';
@@ -1769,6 +1932,7 @@
         updateScrubberUI();
         resizeStage();
         probeVideoFps();
+        KL.emit('videoload', { name: currentVideoName, width: video.videoWidth, height: video.videoHeight, duration: video.duration });
       };
     }
 
@@ -1809,6 +1973,11 @@
      * Same maths as formatCalibratedDistance, returned as a number for the CSV.
      */
     function calibratedLength(item, box) {
+      // An advanced module (perspective correction) may supply the real-world length instead.
+      if (KL.lengthOverride) {
+        const o = KL.lengthOverride(item.p1, item.p2, box);
+        if (o) return o;
+      }
       const scaleObj = getActiveScale();
       if (!scaleObj) return null;
       const scalePx = computePixelLength(scaleObj, box);
@@ -1855,7 +2024,6 @@
      * its phase, frame, time and the time since the previous phase.
      */
     function exportMeasurementsCsv() {
-      if (!annotations.length) { showBanner('Nothing to export yet - draw some measurements first.', true); return; }
       const box = getVideoBox();
       const fps = getVideoFps();
       const header = ['Bookmark', 'Frame', 'Time_s', 'Since_prev_bookmark_s', 'Label', 'Type', 'Value', 'Unit', 'Tilt_deg', 'Notes'];
@@ -1864,7 +2032,10 @@
       const rowFor = (item, bmName, frame, time, gap) => {
         let value = '', unit = '', tilt = '', notes = '';
         const px = k => normToPixel(item[k], box);
-        if (item.type === 'angle') {
+        if (KL.types[item.type]) {
+          const c = KL.types[item.type].csv ? KL.types[item.type].csv(item, box) : {};
+          value = c.value ?? ''; unit = c.unit ?? ''; tilt = c.tilt ?? ''; notes = c.notes ?? '';
+        } else if (item.type === 'angle') {
           value = computeAngleDegrees(px('p1'), px('vertex'), px('p3'), item.reflex).toFixed(1);
           unit = 'deg';
           notes = item.reflex ? 'reflex' : 'interior';
@@ -1896,6 +2067,8 @@
         }
         rows.push([bmName, frame, time, gap, item.label || '', item.type, value, unit, tilt, notes]);
       };
+      // Advanced modules may append their own rows (e.g. jump height, tracked-point kinematics).
+      const extraRows = [];
 
       bookmarks.forEach((bm, i) => {
         const gap = i > 0 ? (bm.time - bookmarks[i - 1].time).toFixed(3) : '';
@@ -1904,6 +2077,10 @@
       });
       annotations.filter(a => a.bookmarkId == null)
         .forEach(a => rowFor(a, '(all frames)', '', '', ''));
+      // Rows use the same 10 columns as `header`.
+      KL.emit('csv', { rows: extraRows, box });
+      rows.push(...extraRows);
+      if (rows.length === 1) { showBanner('Nothing to export yet - draw some measurements first.', true); return; }
 
       const meta = `# ${currentVideoName || 'demo'} · ${fps} fps${fpsOverride ? ' (set manually)' : detectedFps ? ' (detected)' : ' (assumed)'}`;
       const csv = [csvField(meta), ...rows.map(r => r.map(csvField).join(','))].join('\r\n');
@@ -1916,7 +2093,8 @@
     const ANNOTATION_TYPES = ['angle', 'line', 'scale', 'plumb', 'arrow', 'circle', 'pen'];
 
     function saveSession() {
-      if (!annotations.length && !bookmarks.length) { showBanner('Nothing to save yet.', true); return; }
+      const hasExtras = Object.values(KL.session).some(m => m.save() != null);
+      if (!annotations.length && !bookmarks.length && !hasExtras) { showBanner('Nothing to save yet.', true); return; }
       const data = {
         format: SESSION_FORMAT,
         version: SESSION_VERSION,
@@ -1925,7 +2103,9 @@
           : null,
         fps: { override: fpsOverride, detected: detectedFps },
         bookmarks,
-        annotations
+        annotations,
+        // Advanced modules' own data (tracks, notes, view settings...), keyed by module.
+        extras: Object.fromEntries(Object.entries(KL.session).map(([k, m]) => [k, m.save()]).filter(([, v]) => v != null))
       };
       downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `${exportBaseName()}_kinelab.json`);
       showBanner(`Saved ${annotations.length} markup(s) and ${bookmarks.length} bookmark(s).`, false);
@@ -1941,7 +2121,7 @@
     }
 
     function cleanAnnotation(a, validBookmarkIds) {
-      if (!a || !ANNOTATION_TYPES.includes(a.type) || !/^[\w-]{1,64}$/.test(String(a.id))) return null;
+      if (!a || !(ANNOTATION_TYPES.includes(a.type) || KL.types[a.type]) || !/^[\w-]{1,64}$/.test(String(a.id))) return null;
       const out = {
         id: String(a.id),
         type: a.type,
@@ -1950,7 +2130,13 @@
         dashed: !!a.dashed,
         bookmarkId: a.type !== 'scale' && validBookmarkIds.has(a.bookmarkId) ? a.bookmarkId : null
       };
-      if (a.type === 'angle') {
+      if (KL.types[a.type]) {
+        // Custom types validate their own fields; points listed by handleKeys are cleaned here.
+        const t = KL.types[a.type];
+        for (const k of (t.handleKeys ? t.handleKeys(a) : [])) { out[k] = cleanPoint(a[k]); if (!out[k]) return null; }
+        if (t.clean && !t.clean(a, out)) return null;
+        return out;
+      } else if (a.type === 'angle') {
         out.reflex = !!a.reflex;
         for (const k of ['p1', 'vertex', 'p3']) { out[k] = cleanPoint(a[k]); if (!out[k]) return null; }
       } else if (a.type === 'pen') {
@@ -2014,6 +2200,11 @@
         selectedId = null;
         selectedBookmarkId = null;
         pendingAnglePts = [];
+        // Each module validates its own extras; unknown keys are ignored.
+        const extras = data.extras && typeof data.extras === 'object' ? data.extras : {};
+        for (const [k, m] of Object.entries(KL.session)) {
+          try { m.load(extras[k] ?? null, { bookmarkIds: ids }); } catch (err) { console.warn('KineLab: could not load', k, err); }
+        }
         syncBookmarkUI(true);
         syncInspectorUI();
         updateScrubberUI();
@@ -2022,6 +2213,7 @@
         const nameNote = sv && sv.name && currentVideoName && sv.name !== currentVideoName ? ` (saved from "${sv.name}")` : '';
         const dropNote = dropped > 0 ? ` ${dropped} invalid item(s) skipped.` : '';
         showBanner(`Loaded ${annotations.length} markup(s) and ${bookmarks.length} bookmark(s)${nameNote}.${dropNote}`, false);
+        KL.commit();
       }).catch(() => showBanner(`Could not read "${file.name}".`, true));
     }
 
@@ -2033,8 +2225,11 @@
       selectedBookmarkId = null;
       replacedScaleItem = null;
       dragState = null;
+      // Modules drop per-clip data (tracks, notes, history) on the same occasions.
+      KL.emit('reset', {});
       syncBookmarkUI(true);
       syncInspectorUI();
+      KL.resetCommitBaseline();
     }
 
     /**
@@ -2251,6 +2446,7 @@
       reconcileSelection();
       syncInspectorUI();
       renderFrame();
+      KL.emit('frame', { frame: currentFrameIndex() });
       if (typeof video.requestVideoFrameCallback === 'function') {
         video.requestVideoFrameCallback(() => renderFrame());
       }
@@ -2289,17 +2485,13 @@
       return Math.hypot(p2.x - p1.x, p2.y - p1.y);
     }
 
+    // Why one path for all calibrated lengths: canvas, inspector, list and CSV must agree, and
+    // a near-zero-length reference returns null ("No scale") instead of readouts in the millions.
     function formatCalibratedDistance(item, box) {
-      const scaleObj = getActiveScale();
-      const itemPx = computePixelLength(item, box);
-      if (!scaleObj) return null;
-      const scalePx = computePixelLength(scaleObj, box);
-      // Why: a (near) zero-length reference cannot calibrate anything; the old 1e-4 floor
-      // produced readouts in the millions instead of "(No scale)".
-      if (scalePx < 1) return null;
-      const realDist = (itemPx / scalePx) * (scaleObj.knownValue || 1);
-      const decimals = scaleObj.unit === 'mm' ? 1 : 2;
-      return `${realDist.toFixed(decimals)} ${scaleObj.unit || 'm'}`;
+      const cal = calibratedLength(item, box);
+      if (!cal) return null;
+      const decimals = cal.unit === 'mm' ? 1 : 2;
+      return `${cal.value.toFixed(decimals)} ${cal.unit}`;
     }
 
     function getSelectedAnnotation() {
@@ -2336,6 +2528,16 @@
       const normPt = pixelToNorm(pt.x, pt.y, box);
 
       showLoupeAt(pt);
+
+      // Advanced tools registered in KL.tools. A tool with capturesAll gets every press, even on
+      // top of existing markups (e.g. digitising a joint that an angle already marks).
+      const customTool = KL.tools[activeTool];
+      if (customTool && customTool.capturesAll && customTool.onDown) {
+        const liftedPt = getStageCoords(e, true);
+        customTool.onDown({ e, rawPt, pt: liftedPt, normPt: pixelToNorm(liftedPt.x, liftedPt.y, box), box });
+        renderFrame();
+        return;
+      }
 
       if (pendingAnglePts.length === 0) {
         if (hitHandle) {
@@ -2381,6 +2583,11 @@
       }
 
       // Tool-specific creation
+      if (customTool && customTool.onDown) {
+        customTool.onDown({ e, rawPt, pt, normPt, box });
+        renderFrame();
+        return;
+      }
       if (activeTool === 'angle') {
         // Snap the 2nd/3rd point onto an existing joint handle within 12 px, so angles that
         // share a joint use the identical point instead of one a few pixels off.
@@ -2499,6 +2706,15 @@
       cursorPos = pt;
       const normPt = pixelToNorm(pt.x, pt.y, box);
 
+      if (dragState && dragState.type === 'custom') {
+        if (!dragState.noLoupe) showLoupeAt(pt);
+        const tool = KL.tools[dragState.tool];
+        if (tool && tool.onMove) tool.onMove({ e, rawPt: getStageCoords(e, false), pt, normPt, box, drag: dragState });
+        syncInspectorUI();
+        renderFrame();
+        return;
+      }
+
       if (dragState) {
         showLoupeAt(pt);
         const item = dragState.item;
@@ -2542,8 +2758,7 @@
           const rawMovePt = getStageCoords(e, false);
           const currentNorm = pixelToNorm(rawMovePt.x, rawMovePt.y, box);
           const orig = dragState.initCoords;
-          const origPts = item.type === 'angle' ? [orig.p1, orig.vertex, orig.p3]
-            : item.type === 'pen' ? orig.points : [orig.p1, orig.p2];
+          const origPts = coordsPoints(orig);
           // Why one shared, clamped delta: clamping each point separately let the leading end
           // stop at the frame edge while the others kept moving, so a "move" silently changed
           // the angle or length. The shape now stays rigid and simply stops at the edge.
@@ -2555,15 +2770,8 @@
           dNy = Math.max(-Math.min(...ys), Math.min(1 - Math.max(...ys), dNy));
           const shift = p => ({ nx: p.nx + dNx, ny: p.ny + dNy });
 
-          if (item.type === 'angle') {
-            item.p1 = shift(orig.p1);
-            item.vertex = shift(orig.vertex);
-            item.p3 = shift(orig.p3);
-          } else if (item.type === 'pen') {
-            item.points = orig.points.map(shift);
-          } else {
-            item.p1 = shift(orig.p1);
-            item.p2 = shift(orig.p2);
+          for (const [k, v] of Object.entries(orig)) {
+            item[k] = k === 'points' ? v.map(shift) : shift(v);
           }
         } else if (dragState.type === 'pen') {
           item.points.push(normPt);
@@ -2583,6 +2791,15 @@
         loupeContainer.style.display = 'none';
       }
       renderFrame();
+
+      if (finishedDrag && finishedDrag.type === 'custom') {
+        const tool = KL.tools[finishedDrag.tool];
+        if (tool && tool.onUp) tool.onUp({ drag: finishedDrag });
+        syncInspectorUI();
+        renderFrame();
+        KL.commit();
+        return;
+      }
 
       if (!finishedDrag || !finishedDrag.item) return;
       const item = finishedDrag.item;
@@ -2803,15 +3020,30 @@
 
       const box = getVideoBox();
 
+      ctx.save();
+      if (KL.view.mirror) {
+        // Flip the picture about the box centre; markups are mirrored in normToPixel.
+        ctx.translate(box.x * 2 + box.w, 0);
+        ctx.scale(-1, 1);
+      }
       if (hasLoadedVideo && video.readyState >= 2) {
         ctx.drawImage(video, box.x, box.y, box.w, box.h);
       } else {
         drawDemoFigure(box);
       }
+      ctx.restore();
+      KL.emit('renderVideo', { ctx, box });
 
       annotations.forEach(item => {
         if (!isAnnotationVisible(item)) return; // belongs to another phase's bookmark
         const isSel = item.id === selectedId;
+        const customType = KL.types[item.type];
+        if (customType) {
+          ctx.save();
+          if (customType.render) customType.render(item, ctx, box, isSel);
+          ctx.restore();
+          return;
+        }
         ctx.save();
         ctx.strokeStyle = item.color;
         ctx.fillStyle = item.color;
@@ -2992,6 +3224,7 @@
         ctx.restore();
       }
 
+      KL.emit('render', { ctx, box });
       renderLoupe();
     }
 
@@ -3054,7 +3287,11 @@
         if (document.activeElement !== inputEl) {
           inputEl.value = sel.label || '';
         }
-        if (sel.type === 'angle') {
+        if (KL.types[sel.type]) {
+          const r = KL.types[sel.type].readout ? KL.types[sel.type].readout(sel, box) : null;
+          valEl.textContent = r ? r.value : (sel.label || 'Markup');
+          badgeEl.textContent = r && r.badge ? r.badge : sel.type.toUpperCase();
+        } else if (sel.type === 'angle') {
           const deg = computeAngleDegrees(
             normToPixel(sel.p1, box),
             normToPixel(sel.vertex, box),
@@ -3150,7 +3387,10 @@
 
       listEl.innerHTML = shown.map(item => {
         let readout = item.type.toUpperCase();
-        if (item.type === 'angle') {
+        if (KL.types[item.type]) {
+          const r = KL.types[item.type].readout ? KL.types[item.type].readout(item, box) : null;
+          if (r) readout = r.list || r.value;
+        } else if (item.type === 'angle') {
           const deg = computeAngleDegrees(
             normToPixel(item.p1, box),
             normToPixel(item.vertex, box),
@@ -3225,6 +3465,8 @@
     }
 
     function undoLast() {
+      // Advanced mode replaces this with full undo history (see KL.undoOverride).
+      if (KL.undoOverride && pendingAnglePts.length === 0 && KL.undoOverride()) return;
       if (pendingAnglePts.length > 0) {
         pendingAnglePts.pop();
         updatePromptBanner();
@@ -3265,14 +3507,37 @@
       } else if (hasLoadedVideo && !video.paused) {
         renderFrame();
       }
+      // Why poll for changes: many paths mutate markups (drags, labels, colours, modules), and
+      // undo history and autosave need one reliable signal. KL.commit() only emits 'change' when
+      // the serialized state actually differs, and never mid-drag.
+      if (now - lastCommitCheck > COMMIT_POLL_MS && !dragState) {
+        lastCommitCheck = now;
+        KL.commit();
+      }
       requestAnimationFrame(tick);
     }
 
+    KL.panel = document.getElementById('advancedPanel');
+    KL.toolbar = document.querySelector('.segmented-pill');
+    // Advanced modules load in later <script> blocks, so restore the saved mode once they have
+    // registered their controls.
+    document.addEventListener('DOMContentLoaded', () => {
+      let saved = false;
+      try { saved = localStorage.getItem('kinelab.advanced') === '1'; } catch (err) { /* private mode */ }
+      toggleAdvanced(saved);
+      KL.resetCommitBaseline();
+    });
     resizeStage();
     syncInspectorUI();
     syncBookmarkUI(true);
     updateScrubberUI();
     requestAnimationFrame(tick);
   </script>
+
+  <!-- ==== Advanced modules ====
+       Each block below is self-contained and talks to the core only through window.KL.
+       Source of truth while developing: adv/*.js (inlined here so the app stays one file). -->
+  <!-- @@ADVANCED_MODULES@@ -->
+<!-- @@END_ADVANCED_MODULES@@ -->
 </body>
 </html>

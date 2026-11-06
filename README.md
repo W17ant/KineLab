@@ -8,7 +8,7 @@ The whole app is a single `index.html`. There's no install, no account and no se
 
 ## Getting started
 
-Download `index.html` and open it in Chrome, Safari or Edge. That's it. If you'd rather try it before using your own footage, the `docs` folder has a six second side-on single-leg box squat (`box-squat-side.mp4`) and a saved session for it (`box-squat-side.kinelab.json`). Open the video, then press Load in the sidebar and pick the session file to see the screenshots below come to life.
+**[Open KineLab in your browser](https://w17ant.github.io/KineLab/)**, or download `index.html` and open it in Chrome, Safari or Edge. Either way the video stays on your machine. If you'd rather try it before using your own footage, the `docs` folder has a six second side-on single-leg box squat (`box-squat-side.mp4`) and a saved session for it (`box-squat-side.kinelab.json`). Open the video, then press Load in the sidebar and pick the session file to see the screenshots below come to life.
 
 It works with a finger or Apple Pencil on an iPad as well as with a mouse. On touch, points land a little above your fingertip so your finger never hides the joint you're aiming at, and a magnifier shows exactly where the point will go.
 

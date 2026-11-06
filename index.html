@@ -2344,11 +2344,17 @@
           // lift used to be applied on the first move only, jumping the endpoint 24 px up
           // before the finger had gone anywhere and changing the measurement.
           const handlePx = normToPixel(hitHandle.item[hitHandle.handleKey], box);
+          // Why moved/tapNorm: joints are shared between angles (the hip is in both the knee and
+          // the hip angle), so with the Angle tool a tap on an existing handle must start a new
+          // angle at that exact joint; only a real drag moves the handle.
           dragState = {
             type: 'handle',
             item: hitHandle.item,
             handleKey: hitHandle.handleKey,
-            grabOffset: { x: handlePx.x - rawPt.x, y: handlePx.y - rawPt.y }
+            grabOffset: { x: handlePx.x - rawPt.x, y: handlePx.y - rawPt.y },
+            moved: false,
+            startPx: rawPt,
+            tapNorm: { ...hitHandle.item[hitHandle.handleKey] }
           };
           syncInspectorUI();
           renderFrame();
@@ -2363,7 +2369,10 @@
             type: 'translate',
             item: hitBody,
             startNormPt: pixelToNorm(rawPt.x, rawPt.y, box),
-            initCoords: cloneItemCoords(hitBody)
+            initCoords: cloneItemCoords(hitBody),
+            moved: false,
+            startPx: rawPt,
+            tapNorm: normPt // a tap on a markup's body with the Angle tool places a point here
           };
           syncInspectorUI();
           renderFrame();
@@ -2373,7 +2382,18 @@
 
       // Tool-specific creation
       if (activeTool === 'angle') {
-        pendingAnglePts.push(normPt);
+        // Snap the 2nd/3rd point onto an existing joint handle within 12 px, so angles that
+        // share a joint use the identical point instead of one a few pixels off.
+        const SNAP_PX = 12;
+        let placed = normPt;
+        for (const a of visibleAnnotations()) {
+          const keys = a.type === 'angle' ? ['p1', 'vertex', 'p3'] : (a.p1 && a.p2 ? ['p1', 'p2'] : []);
+          for (const k of keys) {
+            const hp = normToPixel(a[k], box);
+            if (Math.hypot(hp.x - pt.x, hp.y - pt.y) <= SNAP_PX) placed = { ...a[k] };
+          }
+        }
+        pendingAnglePts.push(placed);
         if (pendingAnglePts.length === 3) {
           const newAngle = {
             id: 'ang_' + Date.now(),
@@ -2482,6 +2502,16 @@
       if (dragState) {
         showLoupeAt(pt);
         const item = dragState.item;
+        // Grabbed handles and bodies stay put until the pointer travels 3 px, so a tap can be
+        // read as a tap (see endPointerInteraction) without nudging the markup.
+        if ((dragState.type === 'handle' || dragState.type === 'translate') && dragState.moved === false) {
+          const raw = getStageCoords(e, false);
+          if (Math.hypot(raw.x - dragState.startPx.x, raw.y - dragState.startPx.y) <= 3) {
+            renderFrame();
+            return;
+          }
+          dragState.moved = true;
+        }
         // Why: endPointerInteraction discards a tap that never became a drag (3 px of jitter allowed).
         if ((dragState.type === 'create' || dragState.type === 'create-scale') && !dragState.moved
             && Math.hypot(pt.x - dragState.startPx.x, pt.y - dragState.startPx.y) > 3) {
@@ -2556,6 +2586,17 @@
 
       if (!finishedDrag || !finishedDrag.item) return;
       const item = finishedDrag.item;
+
+      // With the Angle tool, a tap on an existing markup starts a new angle there (snapped to
+      // the joint when it was a handle) instead of only selecting it.
+      if ((finishedDrag.type === 'handle' || finishedDrag.type === 'translate')
+          && finishedDrag.moved === false && activeTool === 'angle' && finishedDrag.tapNorm) {
+        pendingAnglePts.push({ ...finishedDrag.tapNorm });
+        loupeContainer.style.display = 'block';
+        updatePromptBanner();
+        renderFrame();
+        return;
+      }
 
       // Why: a tap that never became a drag left the pointerdown placeholder behind - a
       // diagonal "plumb", a Line length nobody drew, a Scale 5% of the frame wide - and its

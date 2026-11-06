@@ -981,6 +981,32 @@
           <div id="bookmarkList" class="measure-list" style="margin-top:8px"></div>
         </div>
 
+        <!-- Export & Session: annotated frame image, per-phase measurements table, and save/restore of the whole analysis -->
+        <div>
+          <div class="section-label">Export &amp; Session</div>
+          <div class="modal-actions">
+            <button type="button" class="action-btn" onclick="exportFramePng()" title="Save the current frame with its markups as a PNG">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+              <span>Frame PNG</span>
+            </button>
+            <button type="button" class="action-btn" onclick="exportMeasurementsCsv()" title="All measurements on every bookmark, as a spreadsheet">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
+              <span>Data CSV</span>
+            </button>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="action-btn" onclick="saveSession()" title="Save markups, bookmarks, scale and frame rate to a file">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Save</span>
+            </button>
+            <input type="file" id="sessionFileInput" accept=".json,application/json" style="display:none" onchange="loadSession(event)">
+            <button type="button" class="action-btn" onclick="document.getElementById('sessionFileInput').click()" title="Restore a saved analysis onto the open video">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <span>Load</span>
+            </button>
+          </div>
+        </div>
+
         <!-- Video Frame Rate: drives ±1F stepping and the frame counter. Auto-detected on load; type or pick a rate to override (e.g. 120/240 fps slow-motion). -->
         <div>
           <div class="section-label">Video Frame Rate</div>
@@ -1221,6 +1247,7 @@
     // the scale reference is always global because calibration belongs to the camera setup, not
     // a phase). A bookmark stores the frame's own timestamp (n / fps) rather than the index so it
     // still points at the same moment if the frame-rate override changes.
+    let currentVideoName = null;   // File name of the open clip; used in export file names and session checks
     let bookmarks = [];            // { id, name, time }
     let selectedBookmarkId = null; // Row highlighted in the list when not on a bookmarked frame
     let lastSyncedBookmarkId = undefined; // Last active bookmark the list was rendered for
@@ -1713,6 +1740,8 @@
     function handleVideoUpload(e) {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
+      currentVideoName = file.name;
+      e.target.value = ''; // allow re-opening the same file to start a fresh analysis
       demoPlaying = false;
       const url = URL.createObjectURL(file);
       video.src = url;
@@ -1750,6 +1779,252 @@
      * scale reference means nothing for a new camera setup, and bookmarks are moments in the
      * old clip. Also used when a load fails, since the old clip is gone with its src.
      */
+    // ---- Export & session ---------------------------------------------------------------
+
+    /** Show a message in the prompt banner (red for problems, green for success). */
+    function showBanner(message, isError) {
+      document.getElementById('promptDot').style.background = isError ? 'var(--ios-red)' : 'var(--ios-green)';
+      document.getElementById('promptText').textContent = message;
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    /** Video file name without extension, made safe for use in a download name. */
+    function exportBaseName() {
+      const raw = currentVideoName ? currentVideoName.replace(/\.[^.]+$/, '') : 'kinelab';
+      return raw.replace(/[^\w.-]+/g, '_').slice(0, 80) || 'kinelab';
+    }
+
+    /**
+     * Real-world length of a two-point item against the confirmed scale, or null.
+     * Same maths as formatCalibratedDistance, returned as a number for the CSV.
+     */
+    function calibratedLength(item, box) {
+      const scaleObj = getActiveScale();
+      if (!scaleObj) return null;
+      const scalePx = computePixelLength(scaleObj, box);
+      if (scalePx < 1) return null;
+      return { value: (computePixelLength(item, box) / scalePx) * (scaleObj.knownValue || 1), unit: scaleObj.unit || 'm' };
+    }
+
+    /**
+     * Save the visible frame with its markups at on-screen resolution, cropped to the video
+     * (no letterbox bars). Selection rings are hidden for the capture.
+     */
+    function exportFramePng() {
+      const box = getVideoBox();
+      const dpr = window.devicePixelRatio || 1;
+      const savedSel = selectedId;
+      selectedId = null;
+      renderFrame();
+      const out = document.createElement('canvas');
+      out.width = Math.round(box.w * dpr);
+      out.height = Math.round(box.h * dpr);
+      out.getContext('2d').drawImage(canvas, Math.round(box.x * dpr), Math.round(box.y * dpr), out.width, out.height, 0, 0, out.width, out.height);
+      selectedId = savedSel;
+      renderFrame();
+
+      const bm = activeBookmark();
+      const frame = hasLoadedVideo ? `F${currentFrameIndex()}` : 'demo';
+      const phase = bm && bm.name ? '_' + bm.name.replace(/[^\w.-]+/g, '_') : '';
+      out.toBlob(blob => {
+        if (!blob) { showBanner('Could not create the image.', true); return; }
+        downloadBlob(blob, `${exportBaseName()}_${frame}${phase}.png`);
+      }, 'image/png');
+    }
+
+    /** CSV field: quoted, with embedded quotes doubled. Why prefix: stops spreadsheets running labels starting with = + - @ as formulas. */
+    function csvField(v) {
+      let s = v === null || v === undefined ? '' : String(v);
+      if (/^[=+\-@]/.test(s) && isNaN(Number(s))) s = "'" + s;
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+
+    /**
+     * One row per measurement, grouped by bookmark in time order, then global markups.
+     * Why this shape: a kinesiologist compares the same joint across phases, so each row carries
+     * its phase, frame, time and the time since the previous phase.
+     */
+    function exportMeasurementsCsv() {
+      if (!annotations.length) { showBanner('Nothing to export yet - draw some measurements first.', true); return; }
+      const box = getVideoBox();
+      const fps = getVideoFps();
+      const header = ['Bookmark', 'Frame', 'Time_s', 'Since_prev_bookmark_s', 'Label', 'Type', 'Value', 'Unit', 'Tilt_deg', 'Notes'];
+      const rows = [header];
+
+      const rowFor = (item, bmName, frame, time, gap) => {
+        let value = '', unit = '', tilt = '', notes = '';
+        const px = k => normToPixel(item[k], box);
+        if (item.type === 'angle') {
+          value = computeAngleDegrees(px('p1'), px('vertex'), px('p3'), item.reflex).toFixed(1);
+          unit = 'deg';
+          notes = item.reflex ? 'reflex' : 'interior';
+        } else if (item.type === 'line') {
+          const cal = calibratedLength(item, box);
+          if (cal) { value = cal.value.toFixed(cal.unit === 'mm' ? 1 : 3); unit = cal.unit; }
+          else { value = computePixelLength(item, box).toFixed(1); unit = 'px (uncalibrated)'; }
+          tilt = computeLineDegrees(px('p1'), px('p2')).toFixed(1);
+        } else if (item.type === 'plumb') {
+          value = computeLineDegrees(px('p1'), px('p2')).toFixed(1);
+          unit = 'deg';
+        } else if (item.type === 'scale') {
+          value = item.knownValue;
+          unit = item.unit || 'm';
+          notes = item.confirmed ? 'calibration reference' : 'unconfirmed';
+        } else if (item.type === 'arrow') {
+          // Direction of travel, 0 = right, counter-clockwise positive (screen up is positive).
+          const a = px('p1'), b = px('p2');
+          value = (((Math.atan2(a.y - b.y, b.x - a.x) * 180 / Math.PI) + 360) % 360).toFixed(1);
+          unit = 'deg';
+          notes = 'direction';
+        } else if (item.type === 'circle') {
+          const cal = calibratedLength(item, box);
+          value = cal ? cal.value.toFixed(cal.unit === 'mm' ? 1 : 3) : computePixelLength(item, box).toFixed(1);
+          unit = cal ? cal.unit : 'px (uncalibrated)';
+          notes = 'radius';
+        } else {
+          notes = 'freehand trace';
+        }
+        rows.push([bmName, frame, time, gap, item.label || '', item.type, value, unit, tilt, notes]);
+      };
+
+      bookmarks.forEach((bm, i) => {
+        const gap = i > 0 ? (bm.time - bookmarks[i - 1].time).toFixed(3) : '';
+        annotations.filter(a => a.bookmarkId === bm.id)
+          .forEach(a => rowFor(a, bm.name || 'Unnamed', bookmarkFrame(bm), bm.time.toFixed(3), gap));
+      });
+      annotations.filter(a => a.bookmarkId == null)
+        .forEach(a => rowFor(a, '(all frames)', '', '', ''));
+
+      const meta = `# ${currentVideoName || 'demo'} · ${fps} fps${fpsOverride ? ' (set manually)' : detectedFps ? ' (detected)' : ' (assumed)'}`;
+      const csv = [csvField(meta), ...rows.map(r => r.map(csvField).join(','))].join('\r\n');
+      // Why the BOM: Excel otherwise opens UTF-8 as ANSI and mangles the ° and · characters.
+      downloadBlob(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }), `${exportBaseName()}_measurements.csv`);
+    }
+
+    const SESSION_FORMAT = 'kinelab-session';
+    const SESSION_VERSION = 1;
+    const ANNOTATION_TYPES = ['angle', 'line', 'scale', 'plumb', 'arrow', 'circle', 'pen'];
+
+    function saveSession() {
+      if (!annotations.length && !bookmarks.length) { showBanner('Nothing to save yet.', true); return; }
+      const data = {
+        format: SESSION_FORMAT,
+        version: SESSION_VERSION,
+        video: hasLoadedVideo
+          ? { name: currentVideoName, duration: video.duration, width: video.videoWidth, height: video.videoHeight }
+          : null,
+        fps: { override: fpsOverride, detected: detectedFps },
+        bookmarks,
+        annotations
+      };
+      downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `${exportBaseName()}_kinelab.json`);
+      showBanner(`Saved ${annotations.length} markup(s) and ${bookmarks.length} bookmark(s).`, false);
+    }
+
+    /**
+     * Validate one stored point. Why strict: session files are user-supplied, and ids, colours
+     * and labels end up in the sidebar's HTML, so nothing is trusted as-is.
+     */
+    function cleanPoint(p) {
+      if (!p || !Number.isFinite(p.nx) || !Number.isFinite(p.ny)) return null;
+      return { nx: Math.max(0, Math.min(1, p.nx)), ny: Math.max(0, Math.min(1, p.ny)) };
+    }
+
+    function cleanAnnotation(a, validBookmarkIds) {
+      if (!a || !ANNOTATION_TYPES.includes(a.type) || !/^[\w-]{1,64}$/.test(String(a.id))) return null;
+      const out = {
+        id: String(a.id),
+        type: a.type,
+        label: String(a.label || '').slice(0, 80),
+        color: /^#[0-9a-f]{6}$/i.test(a.color) ? a.color : '#30D158',
+        dashed: !!a.dashed,
+        bookmarkId: a.type !== 'scale' && validBookmarkIds.has(a.bookmarkId) ? a.bookmarkId : null
+      };
+      if (a.type === 'angle') {
+        out.reflex = !!a.reflex;
+        for (const k of ['p1', 'vertex', 'p3']) { out[k] = cleanPoint(a[k]); if (!out[k]) return null; }
+      } else if (a.type === 'pen') {
+        if (!Array.isArray(a.points)) return null;
+        out.points = a.points.map(cleanPoint).filter(Boolean);
+        if (out.points.length < 2) return null;
+      } else {
+        out.p1 = cleanPoint(a.p1);
+        out.p2 = cleanPoint(a.p2);
+        if (!out.p1 || !out.p2) return null;
+      }
+      if (a.type === 'scale') {
+        const v = Number(a.knownValue);
+        if (!(v > 0) || !Number.isFinite(v)) return null;
+        out.knownValue = v;
+        out.unit = ['m', 'cm', 'mm'].includes(a.unit) ? a.unit : 'm';
+        out.confirmed = !!a.confirmed;
+      }
+      return out;
+    }
+
+    function loadSession(e) {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      if (!hasLoadedVideo) { showBanner('Open the video first, then load its saved session.', true); return; }
+      file.text().then(text => {
+        let data;
+        try { data = JSON.parse(text); } catch (err) { showBanner(`"${file.name}" is not a KineLab session file.`, true); return; }
+        if (!data || data.format !== SESSION_FORMAT || !Array.isArray(data.annotations) || !Array.isArray(data.bookmarks)) {
+          showBanner(`"${file.name}" is not a KineLab session file.`, true);
+          return;
+        }
+        // Why refuse a different aspect ratio: coordinates are normalized to the video box,
+        // so they would be stretched and every angle and distance would read wrong.
+        const sv = data.video;
+        if (sv && sv.width && sv.height && video.videoWidth && video.videoHeight) {
+          const ratioDiff = Math.abs(sv.width / sv.height - video.videoWidth / video.videoHeight);
+          if (ratioDiff > 0.01) {
+            showBanner(`This session was made on a ${sv.width}×${sv.height} video; the open one is ${video.videoWidth}×${video.videoHeight}. Not loaded - measurements would be distorted.`, true);
+            return;
+          }
+        }
+        const cleanBookmarks = data.bookmarks
+          .filter(b => b && /^[\w-]{1,64}$/.test(String(b.id)) && Number.isFinite(b.time) && b.time >= 0 && b.time <= (video.duration || Infinity))
+          .map(b => ({ id: String(b.id), name: String(b.name || '').slice(0, 60), time: b.time }))
+          .sort((a, b) => a.time - b.time);
+        const ids = new Set(cleanBookmarks.map(b => b.id));
+        const cleanAnnotations = data.annotations.map(a => cleanAnnotation(a, ids)).filter(Boolean);
+        // Only one scale reference may exist.
+        let seenScale = false;
+        const finalAnnotations = cleanAnnotations.filter(a => a.type !== 'scale' || (!seenScale && (seenScale = true)));
+        const dropped = data.annotations.length - finalAnnotations.length;
+
+        applyFpsChange(() => {
+          const o = data.fps && Number(data.fps.override);
+          fpsOverride = o >= 1 && o <= 1000 ? o : null;
+        });
+        annotations = finalAnnotations;
+        bookmarks = cleanBookmarks;
+        selectedId = null;
+        selectedBookmarkId = null;
+        pendingAnglePts = [];
+        syncBookmarkUI(true);
+        syncInspectorUI();
+        updateScrubberUI();
+        renderFrame();
+
+        const nameNote = sv && sv.name && currentVideoName && sv.name !== currentVideoName ? ` (saved from "${sv.name}")` : '';
+        const dropNote = dropped > 0 ? ` ${dropped} invalid item(s) skipped.` : '';
+        showBanner(`Loaded ${annotations.length} markup(s) and ${bookmarks.length} bookmark(s)${nameNote}.${dropNote}`, false);
+      }).catch(() => showBanner(`Could not read "${file.name}".`, true));
+    }
+
     function resetAnalysisState() {
       annotations = [];
       bookmarks = [];
@@ -2858,7 +3133,7 @@
           <div class="measure-item ${isSel}" onclick="selectAnnotationById('${item.id}')">
             <div class="measure-left">
               <span class="measure-dot" style="background:${item.color}"></span>
-              <span class="measure-name">${item.label || 'Unnamed'}</span>
+              <span class="measure-name">${escapeHtml(item.label || 'Unnamed')}</span>
             </div>
             <div class="measure-right">
               <span class="measure-val">${readout}</span>

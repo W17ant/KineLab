@@ -1602,9 +1602,30 @@
       });
     }
 
+    /**
+     * Parse a user-entered real-world length. Why strict: parseFloat('1,8') is 1, and an empty
+     * or invalid field used to become 1.0 silently - either way every line was calibrated
+     * against a value the user never entered. Accepts a comma decimal. Returns null unless the
+     * whole string is a number greater than 0.
+     */
+    function parseLengthInput(raw) {
+      const s = String(raw).trim().replace(',', '.');
+      if (!/^(\d+\.?\d*|\.\d+)$/.test(s)) return null;
+      const n = Number(s);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }
+
     function confirmScaleModal() {
-      const rawVal = parseFloat(document.getElementById('modalScaleValueInput').value);
-      const validVal = (!isNaN(rawVal) && rawVal > 0) ? rawVal : 1.0;
+      const input = document.getElementById('modalScaleValueInput');
+      const validVal = parseLengthInput(input.value);
+      if (validVal === null) {
+        // Keep the modal open rather than inventing a value.
+        input.style.borderColor = 'var(--ios-red)';
+        input.placeholder = 'Enter a length greater than 0';
+        input.focus();
+        return;
+      }
+      input.style.borderColor = '';
       const scaleItem = annotations.find(a => a.id === pendingScaleItemId) || getScaleAnnotation();
       if (scaleItem) {
         scaleItem.knownValue = validVal;
@@ -1672,12 +1693,18 @@
       };
       video.onloadeddata = () => {
         hasLoadedVideo = true;
-        // Why: bookmarks are moments in the previous clip; they and the markups they own make
-        // no sense on a new one. Global markups (e.g. the scale) are kept, as before.
-        annotations = annotations.filter(a => a.bookmarkId == null);
+        // Why clear everything: coordinates are normalized to the video box, so a clip with a
+        // different aspect ratio silently stretched every stored angle and distance (a 45°
+        // angle read 17.6° after loading a portrait clip), and the previous clip's scale
+        // reference means nothing for a new camera setup. Bookmarks are moments in the old clip.
+        annotations = [];
         bookmarks = [];
+        pendingAnglePts = [];
+        selectedId = null;
         selectedBookmarkId = null;
+        replacedScaleItem = null;
         syncBookmarkUI(true);
+        syncInspectorUI();
         video.currentTime = 0;
         video.pause();
         updatePlayIcon();
@@ -1903,11 +1930,20 @@
       return reflex ? 360 - diff : diff;
     }
 
+    /**
+     * Inclination of a segment from the horizontal, in (-90, 90]: 0 = horizontal, 90 = vertical,
+     * positive = rising to the right. Why signed and folded: the previous |atan2| depended on
+     * which end was drawn first (one segment read 45° drawn one way and 135° the other, and a
+     * leftward horizontal read 180°). A segment has no direction, so fold modulo 180.
+     */
     function computeLineDegrees(p1, p2) {
       const dx = p2.x - p1.x;
-      const dy = p1.y - p2.y;
+      const dy = p1.y - p2.y; // canvas y points down; flip so "up" is positive
       let deg = Math.atan2(dy, dx) * (180 / Math.PI);
-      return Math.abs(deg);
+      deg = ((deg % 180) + 180) % 180; // 0..180, endpoint order no longer matters
+      if (deg > 90) deg -= 180;        // (-90, 90]
+      if (Math.abs(deg) < 0.05) deg = 0; // avoid "-0.0°"
+      return deg;
     }
 
     function computePixelLength(item, box) {
@@ -1920,7 +1956,10 @@
       const scaleObj = getActiveScale();
       const itemPx = computePixelLength(item, box);
       if (!scaleObj) return null;
-      const scalePx = Math.max(1e-4, computePixelLength(scaleObj, box));
+      const scalePx = computePixelLength(scaleObj, box);
+      // Why: a (near) zero-length reference cannot calibrate anything; the old 1e-4 floor
+      // produced readouts in the millions instead of "(No scale)".
+      if (scalePx < 1) return null;
       const realDist = (itemPx / scalePx) * (scaleObj.knownValue || 1);
       const decimals = scaleObj.unit === 'mm' ? 1 : 2;
       return `${realDist.toFixed(decimals)} ${scaleObj.unit || 'm'}`;
@@ -1949,8 +1988,10 @@
       const rawPt = getStageCoords(e, false);
       const box = getVideoBox();
 
-      // Check handle hit first
-      const hitHandle = findHitHandle(rawPt, box);
+      // Check handle hit first. Why not while an angle is half-placed: those taps always create
+      // a point, and treating one as a handle hit skipped the touch lift for that point only,
+      // skewing the angle by 24 px on touchscreens.
+      const hitHandle = pendingAnglePts.length === 0 ? findHitHandle(rawPt, box) : null;
 
       // Coordinate for creation / positioning (with touch finger lift applied)
       const pt = getStageCoords(e, !hitHandle);
@@ -1962,10 +2003,15 @@
       if (pendingAnglePts.length === 0) {
         if (hitHandle) {
           selectedId = hitHandle.item.id;
+          // Why grabOffset: keep the handle where it sits relative to the pointer. The touch
+          // lift used to be applied on the first move only, jumping the endpoint 24 px up
+          // before the finger had gone anywhere and changing the measurement.
+          const handlePx = normToPixel(hitHandle.item[hitHandle.handleKey], box);
           dragState = {
             type: 'handle',
             item: hitHandle.item,
-            handleKey: hitHandle.handleKey
+            handleKey: hitHandle.handleKey,
+            grabOffset: { x: handlePx.x - rawPt.x, y: handlePx.y - rawPt.y }
           };
           syncInspectorUI();
           renderFrame();
@@ -2039,7 +2085,7 @@
         };
         annotations.push(newScale);
         selectedId = newScale.id;
-        dragState = { type: 'create-scale', item: newScale, handleKey: 'p2' };
+        dragState = { type: 'create-scale', item: newScale, handleKey: 'p2', moved: false, startPx: pt };
         syncInspectorUI();
         renderFrame();
       } else if (activeTool === 'line' || activeTool === 'plumb' || activeTool === 'arrow' || activeTool === 'circle') {
@@ -2053,14 +2099,14 @@
           dashed: isDashed,
           bookmarkId: bookmarkIdForNewItem(activeTool),
           p1: { ...normPt },
-          p2: {
-            nx: Math.min(1, normPt.nx + 0.04),
-            ny: Math.min(1, normPt.ny + 0.04)
-          }
+          // Why: a plumb starts vertical so an undragged one is never a diagonal reading 29°.
+          p2: activeTool === 'plumb'
+            ? { nx: normPt.nx, ny: Math.min(1, normPt.ny + 0.04) }
+            : { nx: Math.min(1, normPt.nx + 0.04), ny: Math.min(1, normPt.ny + 0.04) }
         };
         annotations.push(newItem);
         selectedId = newItem.id;
-        dragState = { type: 'create', item: newItem, handleKey: 'p2' };
+        dragState = { type: 'create', item: newItem, handleKey: 'p2', moved: false, startPx: pt };
         syncInspectorUI();
         renderFrame();
       } else if (activeTool === 'pen') {
@@ -2083,24 +2129,38 @@
 
     canvas.addEventListener('pointermove', (e) => {
       const box = getVideoBox();
-      const pt = getStageCoords(e, dragState && dragState.type !== 'translate');
+      let pt;
+      if (dragState && dragState.type === 'handle') {
+        // Handle drags keep the grab offset (see pointerdown) instead of applying the touch lift.
+        const raw = getStageCoords(e, false);
+        pt = { x: raw.x + dragState.grabOffset.x, y: raw.y + dragState.grabOffset.y };
+      } else {
+        pt = getStageCoords(e, dragState && dragState.type !== 'translate');
+      }
       cursorPos = pt;
       const normPt = pixelToNorm(pt.x, pt.y, box);
 
       if (dragState) {
         showLoupeAt(pt);
         const item = dragState.item;
+        // Why: endPointerInteraction discards a tap that never became a drag (3 px of jitter allowed).
+        if ((dragState.type === 'create' || dragState.type === 'create-scale') && !dragState.moved
+            && Math.hypot(pt.x - dragState.startPx.x, pt.y - dragState.startPx.y) > 3) {
+          dragState.moved = true;
+        }
 
         if (dragState.type === 'handle' || dragState.type === 'create' || dragState.type === 'create-scale') {
           if (item.type === 'plumb') {
-            const p1Px = normToPixel(item.p1, box);
-            const dx = Math.abs(pt.x - p1Px.x);
-            const dy = Math.abs(pt.y - p1Px.y);
-            if (dy >= dx) {
-              item.p2 = { nx: item.p1.nx, ny: normPt.ny };
-            } else {
-              item.p2 = { nx: normPt.nx, ny: item.p1.ny };
-            }
+            // Why anchor on the end NOT being dragged: this always moved p2 relative to p1, so
+            // grabbing the p1 handle teleported p2 and could flip the plumb's axis.
+            const fixedKey = dragState.handleKey === 'p1' ? 'p2' : 'p1';
+            const anchor = item[fixedKey];
+            const anchorPx = normToPixel(anchor, box);
+            const dx = Math.abs(pt.x - anchorPx.x);
+            const dy = Math.abs(pt.y - anchorPx.y);
+            item[dragState.handleKey] = dy >= dx
+              ? { nx: anchor.nx, ny: normPt.ny }
+              : { nx: normPt.nx, ny: anchor.ny };
           } else if (item.type === 'line' || item.type === 'scale') {
             // Tweak 2: 5-degree snapping to horizontal & vertical
             const otherKey = dragState.handleKey === 'p1' ? 'p2' : 'p1';
@@ -2112,22 +2172,29 @@
           // Tweak 3: Translate whole measurement without changing angle or size
           const rawMovePt = getStageCoords(e, false);
           const currentNorm = pixelToNorm(rawMovePt.x, rawMovePt.y, box);
-          const dNx = currentNorm.nx - dragState.startNormPt.nx;
-          const dNy = currentNorm.ny - dragState.startNormPt.ny;
           const orig = dragState.initCoords;
+          const origPts = item.type === 'angle' ? [orig.p1, orig.vertex, orig.p3]
+            : item.type === 'pen' ? orig.points : [orig.p1, orig.p2];
+          // Why one shared, clamped delta: clamping each point separately let the leading end
+          // stop at the frame edge while the others kept moving, so a "move" silently changed
+          // the angle or length. The shape now stays rigid and simply stops at the edge.
+          let dNx = currentNorm.nx - dragState.startNormPt.nx;
+          let dNy = currentNorm.ny - dragState.startNormPt.ny;
+          const xs = origPts.map(p => p.nx);
+          const ys = origPts.map(p => p.ny);
+          dNx = Math.max(-Math.min(...xs), Math.min(1 - Math.max(...xs), dNx));
+          dNy = Math.max(-Math.min(...ys), Math.min(1 - Math.max(...ys), dNy));
+          const shift = p => ({ nx: p.nx + dNx, ny: p.ny + dNy });
 
           if (item.type === 'angle') {
-            item.p1 = { nx: Math.max(0, Math.min(1, orig.p1.nx + dNx)), ny: Math.max(0, Math.min(1, orig.p1.ny + dNy)) };
-            item.vertex = { nx: Math.max(0, Math.min(1, orig.vertex.nx + dNx)), ny: Math.max(0, Math.min(1, orig.vertex.ny + dNy)) };
-            item.p3 = { nx: Math.max(0, Math.min(1, orig.p3.nx + dNx)), ny: Math.max(0, Math.min(1, orig.p3.ny + dNy)) };
+            item.p1 = shift(orig.p1);
+            item.vertex = shift(orig.vertex);
+            item.p3 = shift(orig.p3);
           } else if (item.type === 'pen') {
-            item.points = orig.points.map(p => ({
-              nx: Math.max(0, Math.min(1, p.nx + dNx)),
-              ny: Math.max(0, Math.min(1, p.ny + dNy))
-            }));
+            item.points = orig.points.map(shift);
           } else {
-            item.p1 = { nx: Math.max(0, Math.min(1, orig.p1.nx + dNx)), ny: Math.max(0, Math.min(1, orig.p1.ny + dNy)) };
-            item.p2 = { nx: Math.max(0, Math.min(1, orig.p2.nx + dNx)), ny: Math.max(0, Math.min(1, orig.p2.ny + dNy)) };
+            item.p1 = shift(orig.p1);
+            item.p2 = shift(orig.p2);
           }
         } else if (dragState.type === 'pen') {
           item.points.push(normPt);
@@ -2148,11 +2215,37 @@
       }
       renderFrame();
 
-      // Why: `confirmed` is set in confirmScaleModal(), not here, so that Cancel can tell an
-      // unconfirmed scale apart from a kept one and remove it instead of leaving a placeholder
-      // 1 m reference silently calibrating every line.
-      if (finishedDrag && finishedDrag.type === 'create-scale' && finishedDrag.item) {
-        openScaleModal(finishedDrag.item);
+      if (!finishedDrag || !finishedDrag.item) return;
+      const item = finishedDrag.item;
+
+      // Why: a tap that never became a drag left the pointerdown placeholder behind - a
+      // diagonal "plumb", a Line length nobody drew, a Scale 5% of the frame wide - and its
+      // readouts looked real. Circles are the exception: a tap is a valid marker.
+      if (finishedDrag.type === 'create' && !finishedDrag.moved && item.type !== 'circle') {
+        removeAnnotationById(item.id);
+        return;
+      }
+
+      if (finishedDrag.type === 'create-scale') {
+        const MIN_SCALE_PX = 20; // Why: anything shorter cannot calibrate a frame usefully
+        if (!finishedDrag.moved || computePixelLength(item, getVideoBox()) < MIN_SCALE_PX) {
+          annotations = annotations.filter(a => a.id !== item.id);
+          if (replacedScaleItem) {
+            annotations.push(replacedScaleItem);
+            selectedId = replacedScaleItem.id;
+          } else if (selectedId === item.id) {
+            selectedId = null;
+          }
+          replacedScaleItem = null;
+          document.getElementById('promptText').textContent = 'Scale: drag across the whole known length - a tap is too short to calibrate';
+          syncInspectorUI();
+          renderFrame();
+          return;
+        }
+        // Why: `confirmed` is set in confirmScaleModal(), not here, so that Cancel can tell an
+        // unconfirmed scale apart from a kept one and remove it instead of leaving a
+        // placeholder 1 m reference silently calibrating every line.
+        openScaleModal(item);
       }
     }
 
@@ -2632,8 +2725,8 @@
     function onInspectorScaleInput(val) {
       const sel = getSelectedAnnotation();
       if (!sel || sel.type !== 'scale') return;
-      const num = parseFloat(val);
-      if (!isNaN(num) && num > 0) {
+      const num = parseLengthInput(val);
+      if (num !== null) {
         sel.knownValue = num;
         updatePromptBanner();
         syncInspectorUI();
@@ -2716,7 +2809,8 @@
     function removeAnnotationById(id) {
       annotations = annotations.filter(a => a.id !== id);
       if (selectedId === id) {
-        selectedId = annotations.length ? annotations[annotations.length - 1].id : null;
+        const shown = visibleAnnotations(); // never select a markup hidden on another phase
+        selectedId = shown.length ? shown[shown.length - 1].id : null;
       }
       updatePromptBanner();
       syncInspectorUI();

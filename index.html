@@ -1111,7 +1111,36 @@
     }
 
     function totalFrames() {
-      return Math.max(1, Math.floor((video.duration || 0) * getVideoFps() + 1e-4));
+      // Why ceil: a frame exists if it starts before the end of the clip, so a 10.000 s clip
+      // at 29.97 fps has 300 frames (the last one starts at 9.977 s), not floor(299.7) = 299.
+      return Math.max(1, Math.ceil((video.duration || 0) * getVideoFps() - 1e-4));
+    }
+
+    /**
+     * Change the effective frame rate while keeping the user on the same moment.
+     * Why re-seek: the cursor sits at (n + 0.5) / oldFps after a step, and under a new rate
+     * floor(t * newFps) can land one frame off the one a bookmark (round(time * fps)) names,
+     * silently deactivating it. Re-seeking to the frame nearest the old frame's start time
+     * keeps bookmarks, hit-testing and the readout in agreement.
+     */
+    function applyFpsChange(mutate) {
+      const oldFps = getVideoFps();
+      // Anchor on the active bookmark's own timestamp when there is one, so repeated rate
+      // changes cannot drift the cursor off the bookmark through successive roundings.
+      const active = hasLoadedVideo ? activeBookmark() : null;
+      const anchorTime = active ? active.time : (hasLoadedVideo ? currentFrameIndex() / oldFps : null);
+      mutate();
+      const newFps = getVideoFps();
+      if (anchorTime !== null && newFps !== oldFps) {
+        video.pause();
+        seekToFrame(Math.round(anchorTime * newFps));
+        reconcileSelection();
+        syncInspectorUI();
+        syncBookmarkUI(true);
+        renderFrame();
+      }
+      refreshFpsUI();
+      updateScrubberUI();
     }
 
     /**
@@ -1209,8 +1238,11 @@
 
     function isAnnotationVisible(a) {
       if (a.bookmarkId == null) return true;
-      const bm = activeBookmark();
-      return !!bm && bm.id === a.bookmarkId;
+      if (!hasLoadedVideo) return false;
+      // Why check the markup's own bookmark rather than activeBookmark(): if a lower fps
+      // override makes two bookmarks round to the same frame, both sets must still show.
+      const bm = bookmarks.find(b => b.id === a.bookmarkId);
+      return !!bm && bookmarkFrame(bm) === currentFrameIndex();
     }
 
     function visibleAnnotations() {
@@ -1232,6 +1264,12 @@
       if (!hasLoadedVideo) {
         document.getElementById('promptText').textContent = 'Open a video first, then bookmark the frames you measure.';
         return;
+      }
+      if (abortFpsProbe) {
+        // Why: the probe is playing; stamp the frame the user is looking at, not a passing one.
+        abortFpsProbe();
+        video.pause();
+        updatePlayIcon();
       }
       const existing = activeBookmark();
       if (existing) {
@@ -1684,6 +1722,7 @@
       // with no hint why — so say so in the prompt banner.
       video.onerror = () => {
         hasLoadedVideo = false;
+        resetAnalysisState(); // the old clip is gone with its src; its markups would sit on the demo figure
         document.getElementById('promptDot').style.background = 'var(--ios-red)';
         document.getElementById('promptText').textContent =
           `Couldn't open "${file.name}": this browser can't decode its video codec. Convert it to H.264 MP4 and try again.`;
@@ -1693,18 +1732,7 @@
       };
       video.onloadeddata = () => {
         hasLoadedVideo = true;
-        // Why clear everything: coordinates are normalized to the video box, so a clip with a
-        // different aspect ratio silently stretched every stored angle and distance (a 45°
-        // angle read 17.6° after loading a portrait clip), and the previous clip's scale
-        // reference means nothing for a new camera setup. Bookmarks are moments in the old clip.
-        annotations = [];
-        bookmarks = [];
-        pendingAnglePts = [];
-        selectedId = null;
-        selectedBookmarkId = null;
-        replacedScaleItem = null;
-        syncBookmarkUI(true);
-        syncInspectorUI();
+        resetAnalysisState();
         video.currentTime = 0;
         video.pause();
         updatePlayIcon();
@@ -1713,6 +1741,25 @@
         resizeStage();
         probeVideoFps();
       };
+    }
+
+    /**
+     * Drop every markup and bookmark. Why on each new clip: coordinates are normalized to the
+     * video box, so a clip with a different aspect ratio silently stretched every stored angle
+     * and distance (a 45° angle read 17.6° after loading a portrait clip), the previous clip's
+     * scale reference means nothing for a new camera setup, and bookmarks are moments in the
+     * old clip. Also used when a load fails, since the old clip is gone with its src.
+     */
+    function resetAnalysisState() {
+      annotations = [];
+      bookmarks = [];
+      pendingAnglePts = [];
+      selectedId = null;
+      selectedBookmarkId = null;
+      replacedScaleItem = null;
+      dragState = null;
+      syncBookmarkUI(true);
+      syncInspectorUI();
     }
 
     /**
@@ -1743,20 +1790,25 @@
         done = true;
         abortFpsProbe = null;
         video.playbackRate = savedRate;
-        if (!keepPosition) {
-          video.pause();
-          video.currentTime = 0;
-        }
         // Why >= 3: with fewer deltas a dropped frame cannot be told apart from the real period.
-        if (deltas.length >= 3) {
+        const estimate = (() => {
+          if (deltas.length < 3) return null;
           const minDelta = Math.min(...deltas);
           const single = deltas.filter(d => d <= minDelta * 1.5);
           const period = single.reduce((a, b) => a + b, 0) / single.length;
-          detectedFps = snapToCommonFps(1 / period);
+          return snapToCommonFps(1 / period);
+        })();
+        if (keepPosition) {
+          // The user took over mid-probe: keep their frame, re-landing it under the new rate.
+          applyFpsChange(() => { if (estimate !== null) detectedFps = estimate; });
+        } else {
+          if (estimate !== null) detectedFps = estimate;
+          video.pause();
+          video.currentTime = 0;
+          refreshFpsUI();
         }
         updatePlayIcon();
         updateScrubberUI();
-        refreshFpsUI();
       };
 
       const onFrame = (now, meta) => {
@@ -1775,21 +1827,22 @@
       video.requestVideoFrameCallback(onFrame);
       const playAttempt = video.play();
       if (playAttempt && playAttempt.catch) playAttempt.catch(() => finish(false));
+      updatePlayIcon(); // the clip visibly plays during the probe; the button must say so
       setTimeout(() => finish(false), FPS_PROBE_TIMEOUT_MS);
     }
 
     function onFpsInput(val) {
       const num = parseFloat(val);
-      fpsOverride = (!isNaN(num) && num >= 1 && num <= 1000) ? num : null;
-      refreshFpsUI();
-      updateScrubberUI();
+      applyFpsChange(() => {
+        fpsOverride = (!isNaN(num) && num >= 1 && num <= 1000) ? num : null;
+      });
     }
 
     function setFpsPreset(preset) {
-      fpsOverride = preset === 'auto' ? null : preset;
-      document.getElementById('fpsInput').value = fpsOverride ? fpsOverride : '';
-      refreshFpsUI();
-      updateScrubberUI();
+      applyFpsChange(() => {
+        fpsOverride = preset === 'auto' ? null : preset;
+        document.getElementById('fpsInput').value = fpsOverride ? fpsOverride : '';
+      });
     }
 
     function refreshFpsUI() {
@@ -1805,7 +1858,14 @@
 
     function togglePlayback() {
       if (hasLoadedVideo) {
-        if (abortFpsProbe) abortFpsProbe();
+        if (abortFpsProbe) {
+          // Why: the probe is already playing at 0.25x; the user pressing Play means "play
+          // normally from here", not "pause the probe".
+          abortFpsProbe();
+          video.play();
+          updatePlayIcon();
+          return;
+        }
         if (video.paused || video.ended) {
           video.play();
         } else {
@@ -1847,6 +1907,8 @@
     }
 
     function setPlaybackRate(rate, btnEl) {
+      // Why: a rate change mid-probe would skew the fps estimate and then be undone by it.
+      if (abortFpsProbe) abortFpsProbe();
       demoSpeed = rate;
       if (hasLoadedVideo) video.playbackRate = rate;
       document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
@@ -2053,7 +2115,8 @@
           annotations.push(newAngle);
           selectedId = newAngle.id;
           pendingAnglePts = [];
-          dragState = { type: 'handle', item: newAngle, handleKey: 'p3' };
+          // grabOffset keeps the touch lift already applied to the third point while it is refined.
+          dragState = { type: 'handle', item: newAngle, handleKey: 'p3', grabOffset: { x: pt.x - rawPt.x, y: pt.y - rawPt.y } };
           syncInspectorUI();
         }
         updatePromptBanner();
@@ -2133,7 +2196,8 @@
       if (dragState && dragState.type === 'handle') {
         // Handle drags keep the grab offset (see pointerdown) instead of applying the touch lift.
         const raw = getStageCoords(e, false);
-        pt = { x: raw.x + dragState.grabOffset.x, y: raw.y + dragState.grabOffset.y };
+        const off = dragState.grabOffset || { x: 0, y: 0 };
+        pt = { x: raw.x + off.x, y: raw.y + off.y };
       } else {
         pt = getStageCoords(e, dragState && dragState.type !== 'translate');
       }
@@ -2222,6 +2286,11 @@
       // diagonal "plumb", a Line length nobody drew, a Scale 5% of the frame wide - and its
       // readouts looked real. Circles are the exception: a tap is a valid marker.
       if (finishedDrag.type === 'create' && !finishedDrag.moved && item.type !== 'circle') {
+        removeAnnotationById(item.id);
+        return;
+      }
+      // A one-point trace can never be drawn or selected on the canvas, so a pen tap is discarded too.
+      if (finishedDrag.type === 'pen' && item.points.length < 2) {
         removeAnnotationById(item.id);
         return;
       }

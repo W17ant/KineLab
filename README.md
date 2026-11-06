@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.svg" alt="KineLab measuring knee and hip angles across three phases of a box squat" width="100%">
+  <img src="docs/banner.svg" alt="KineLab measuring knee and hip angles across three phases of a single-leg box squat" width="100%">
 </p>
 
 KineLab is a video analysis tool for coaches, physios and sport science students who want numbers off a clip without paying for a Dartfish licence. Open a video, step through it a frame at a time, and draw on it: joint angles, segment tilt, calibrated distances, plumb lines. Bookmark the frames that matter (loading, take-off, landing) and each one keeps its own measurements, so you can flip between phases and compare.
@@ -8,7 +8,7 @@ The whole app is a single `index.html`. There's no install, no account and no se
 
 ## Getting started
 
-Download `index.html` and open it in Chrome, Safari or Edge. That's it. If you'd rather try it before using your own footage, the `docs` folder has a six second side-on box squat (`box-squat-side.mp4`) and a saved session for it (`box-squat-side.kinelab.json`). Open the video, then press Load in the sidebar and pick the session file to see the screenshots below come to life.
+Download `index.html` and open it in Chrome, Safari or Edge. That's it. If you'd rather try it before using your own footage, the `docs` folder has a six second side-on single-leg box squat (`box-squat-side.mp4`) and a saved session for it (`box-squat-side.kinelab.json`). Open the video, then press Load in the sidebar and pick the session file to see the screenshots below come to life.
 
 It works with a finger or Apple Pencil on an iPad as well as with a mouse. On touch, points land a little above your fingertip so your finger never hides the joint you're aiming at, and a magnifier shows exactly where the point will go.
 
@@ -22,7 +22,7 @@ It works with a finger or Apple Pencil on an iPad as well as with a mouse. On to
 6. Repeat for each phase, then export a PNG of the frame or a CSV of everything.
 
 <p align="center">
-  <img src="docs/app-bottom-of-squat.png" alt="KineLab showing a 56.6 degree knee angle at the bottom of a box squat, with three bookmarks in the sidebar" width="100%">
+  <img src="docs/app-bottom-of-squat.png" alt="KineLab showing a 56.6 degree knee angle at the bottom of a single-leg box squat, with three bookmarks in the sidebar" width="100%">
 </p>
 
 ## What it measures

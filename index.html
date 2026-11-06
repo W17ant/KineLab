@@ -968,6 +968,19 @@
           </div>
         </div>
 
+        <!-- Video Frame Rate: drives ±1F stepping and the frame counter. Auto-detected on load; type or pick a rate to override (e.g. 120/240 fps slow-motion). -->
+        <div>
+          <div class="section-label">Video Frame Rate</div>
+          <div class="scale-input-row">
+            <input type="number" id="fpsInput" class="text-input" style="padding-right:11px" step="any" min="1" max="1000" placeholder="Auto" oninput="onFpsInput(this.value)">
+            <div class="unit-pills">
+              <button type="button" class="unit-btn active" data-fps="auto" onclick="setFpsPreset('auto')">Auto</button>
+              <button type="button" class="unit-btn" data-fps="30" onclick="setFpsPreset(30)">30</button>
+              <button type="button" class="unit-btn" data-fps="60" onclick="setFpsPreset(60)">60</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Measurements List -->
         <div>
           <div class="section-label">Measurements on Frame</div>
@@ -1037,8 +1050,62 @@
 
     let dragState = null;
 
-    const STEP_DT = 1 / 60;
+    const STEP_DT = 1 / 60; // Demo-figure only: the built-in animation is modelled at 60 fps
     const TOUCH_FINGER_LIFT = 24; // Pixel lift on touchscreens so finger never covers landmark
+
+    // ---- Frame-rate model -------------------------------------------------------------
+    // Why: HTMLVideoElement exposes no frame rate, yet ±1F stepping and the frame counter
+    // are only right if we know it. Stepping used to assume 60 fps, so on a 30 fps phone
+    // clip each press moved half a frame. We default to 30 (most phone footage), estimate
+    // the real rate from presented-frame timestamps when the browser supports it, and let
+    // the user override for slow-motion clips where detection can under-read.
+    const DEFAULT_FPS = 30;
+    const COMMON_FPS = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 90, 100, 120, 240];
+    const FPS_PROBE_RATE = 0.25;   // Playback rate during detection (see probeVideoFps)
+    const FPS_PROBE_SAMPLES = 10;  // Frame-to-frame deltas needed before we trust the estimate
+    const FPS_PROBE_TIMEOUT_MS = 2500;
+    let fpsOverride = null;  // User-set rate; null means Auto
+    let detectedFps = null;  // Auto estimate for the loaded video; null until a probe succeeds
+    let fpsProbeToken = 0;   // Incremented per video so a stale probe cannot write results
+
+    function getVideoFps() {
+      return fpsOverride || detectedFps || DEFAULT_FPS;
+    }
+
+    /**
+     * Snap a raw estimate onto the nearest standard rate when within 5%, otherwise keep it
+     * rounded. Why 5%: containers with 1 ms timestamps (WebM) make a 120 fps clip read as
+     * ~115 fps; camera footage is always a standard rate, so nearest-wins is safe.
+     */
+    function snapToCommonFps(raw) {
+      let best = null;
+      for (const f of COMMON_FPS) {
+        if (Math.abs(raw - f) / f <= 0.05 && (best === null || Math.abs(raw - f) < Math.abs(raw - best))) best = f;
+      }
+      return best !== null ? best : Math.round(raw * 100) / 100;
+    }
+
+    /**
+     * Index of the frame currently displayed, from the time cursor.
+     * Why +1e-4: currentTime carries float noise after a seek; frame n must never round to n-1.
+     */
+    function currentFrameIndex() {
+      return Math.floor(video.currentTime * getVideoFps() + 1e-4);
+    }
+
+    function totalFrames() {
+      return Math.max(1, Math.floor((video.duration || 0) * getVideoFps() + 1e-4));
+    }
+
+    /**
+     * Seek so that frame n is displayed.
+     * Why +0.5: aim at the middle of the frame interval so decoder timestamp rounding can
+     * never land on the neighbouring frame (seeking to exactly n/fps can show n-1).
+     */
+    function seekToFrame(n) {
+      const clamped = Math.max(0, Math.min(totalFrames() - 1, n));
+      video.currentTime = (clamped + 0.5) / getVideoFps();
+    }
 
     function fillRoundRect(context, x, y, w, h, r) {
       context.beginPath();
@@ -1398,7 +1465,88 @@
         updatePlayIcon();
         updateScrubberUI();
         resizeStage();
+        probeVideoFps();
       };
+    }
+
+    /**
+     * Estimate the clip's frame rate from requestVideoFrameCallback mediaTime deltas.
+     * Plays briefly at FPS_PROBE_RATE, then pauses and returns to frame 0.
+     * Why average only the deltas close to the smallest one: a dropped frame makes a delta
+     * ~2x larger, so anything beyond 1.5x the minimum is excluded; but the minimum alone is
+     * biased on containers with 1 ms timestamps (WebM: 60 fps alternates 16/17 ms, and the
+     * minimum would read as 62.5 fps), so the surviving deltas are averaged.
+     * Why 0.25x: a 120 fps clip then presents 30 frames/s, so nothing is dropped on a 60 Hz
+     * display; at 1x every other frame would be skipped and the clip would read as 60 fps.
+     * Browsers without requestVideoFrameCallback keep DEFAULT_FPS until the user overrides.
+     */
+    function probeVideoFps() {
+      detectedFps = null;
+      refreshFpsUI();
+      if (typeof video.requestVideoFrameCallback !== 'function') return;
+      const token = ++fpsProbeToken;
+      const savedRate = video.playbackRate;
+      let lastMediaTime = null;
+      const deltas = [];
+      let done = false;
+
+      const finish = () => {
+        if (done || token !== fpsProbeToken) return;
+        done = true;
+        video.pause();
+        video.playbackRate = savedRate;
+        video.currentTime = 0;
+        if (deltas.length) {
+          const minDelta = Math.min(...deltas);
+          const single = deltas.filter(d => d <= minDelta * 1.5);
+          const period = single.reduce((a, b) => a + b, 0) / single.length;
+          detectedFps = snapToCommonFps(1 / period);
+        }
+        updatePlayIcon();
+        updateScrubberUI();
+        refreshFpsUI();
+      };
+
+      const onFrame = (now, meta) => {
+        if (done || token !== fpsProbeToken) return;
+        if (lastMediaTime !== null) {
+          const d = meta.mediaTime - lastMediaTime;
+          if (d > 1e-4) deltas.push(d);
+        }
+        lastMediaTime = meta.mediaTime;
+        if (deltas.length >= FPS_PROBE_SAMPLES) { finish(); return; }
+        video.requestVideoFrameCallback(onFrame);
+      };
+
+      video.playbackRate = FPS_PROBE_RATE;
+      video.requestVideoFrameCallback(onFrame);
+      const playAttempt = video.play();
+      if (playAttempt && playAttempt.catch) playAttempt.catch(() => finish());
+      setTimeout(finish, FPS_PROBE_TIMEOUT_MS);
+    }
+
+    function onFpsInput(val) {
+      const num = parseFloat(val);
+      fpsOverride = (!isNaN(num) && num >= 1 && num <= 1000) ? num : null;
+      refreshFpsUI();
+      updateScrubberUI();
+    }
+
+    function setFpsPreset(preset) {
+      fpsOverride = preset === 'auto' ? null : preset;
+      document.getElementById('fpsInput').value = fpsOverride ? fpsOverride : '';
+      refreshFpsUI();
+      updateScrubberUI();
+    }
+
+    function refreshFpsUI() {
+      document.querySelectorAll('[data-fps]').forEach(btn => {
+        const v = btn.getAttribute('data-fps');
+        btn.classList.toggle('active', fpsOverride ? Number(v) === fpsOverride : v === 'auto');
+      });
+      const input = document.getElementById('fpsInput');
+      if (document.activeElement !== input) input.value = fpsOverride ? fpsOverride : '';
+      input.placeholder = detectedFps ? `Auto (${detectedFps} fps detected)` : `Auto (${DEFAULT_FPS} fps assumed)`;
     }
 
     function togglePlayback() {
@@ -1428,8 +1576,9 @@
     function stepFrames(count) {
       if (hasLoadedVideo) {
         video.pause();
-        const dur = video.duration || 10;
-        video.currentTime = Math.max(0, Math.min(dur, video.currentTime + count * STEP_DT));
+        // Why: step by frame index, not by adding a time delta, so one press is always exactly
+        // one frame even after a scrub landed part-way through a frame interval.
+        seekToFrame(currentFrameIndex() + count);
       } else {
         demoPlaying = false;
         demoTime = (demoTime + count * 0.02 + 1) % 1;
@@ -1463,24 +1612,45 @@
     function updateScrubberUI() {
       let cur = 0;
       let dur = 2.5;
+      let frameLabel;
       if (hasLoadedVideo && video.duration) {
-        cur = video.currentTime;
+        // Why: report the displayed frame's own timestamp (n / fps), not the mid-frame time
+        // seekToFrame() aims at, so the readout matches what a frame-accurate editor shows.
+        const n = currentFrameIndex();
+        const fps = getVideoFps();
+        cur = n / fps;
         dur = video.duration;
+        // "~" flags that the rate is assumed, not detected or chosen.
+        frameLabel = `Frame ${n} · ${(fpsOverride || detectedFps) ? '' : '~'}${fps} fps`;
       } else {
         cur = demoTime * dur;
+        frameLabel = `Frame ${Math.round(cur / STEP_DT)}`;
       }
       const slider = document.getElementById('timelineSlider');
       slider.value = Math.round((cur / (dur || 1)) * 1000);
 
-      const mins = Math.floor(cur / 60);
-      const secs = Math.floor(cur % 60);
-      const hundredths = Math.floor((cur % 1) * 100);
+      // Why: work in whole hundredths. Splitting cur with % and floor is off by one for values
+      // like 0.29, where (0.29 % 1) * 100 evaluates to 28.999999999999996.
+      const totalHundredths = Math.round(cur * 100);
+      const mins = Math.floor(totalHundredths / 6000);
+      const secs = Math.floor((totalHundredths % 6000) / 100);
+      const hundredths = totalHundredths % 100;
       document.getElementById('timeText').textContent =
         `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(hundredths).padStart(2, '0')}`;
-      document.getElementById('frameText').textContent = `Frame ${Math.round(cur / STEP_DT)}`;
+      document.getElementById('frameText').textContent = frameLabel;
     }
 
-    video.addEventListener('seeked', renderFrame);
+    // Why: at the 'seeked' event the decoder can still be handing over the previous frame, so
+    // drawing right then can paint frame n-1 under a readout that says n, and nothing
+    // re-renders while paused. requestVideoFrameCallback fires once the sought frame is
+    // actually presented, so draw again then (it simply never fires if the first draw was
+    // already the right frame). Browsers without it keep the immediate draw only.
+    video.addEventListener('seeked', () => {
+      renderFrame();
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        video.requestVideoFrameCallback(() => renderFrame());
+      }
+    });
     video.addEventListener('timeupdate', updateScrubberUI);
     video.addEventListener('ended', updatePlayIcon);
 

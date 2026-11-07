@@ -8,7 +8,7 @@ The whole app is a single `index.html`. There's no install, no account and no se
 
 ## Getting started
 
-**[Open KineLab in your browser](https://w17ant.github.io/KineLab/)**, or download `index.html` and open it in Chrome, Safari or Edge. Either way the video stays on your machine. If you'd rather try it before using your own footage, the `docs` folder has a six second side-on single-leg box squat (`box-squat-side.mp4`) and a saved session for it (`box-squat-side.kinelab.json`). Open the video, then press Load in the sidebar and pick the session file to see the screenshots below come to life.
+**[Open KineLab in your browser](https://w17ant.github.io/KineLab/)**, or download `index.html` and open it in Chrome, Safari or Edge. Either way the video stays on your machine. If you'd rather try it before using your own footage, the `docs` folder has a six second side-on single-leg box squat (`box-squat-side.mp4`) and a saved session for it (`box-squat-side.kinelab.json`). Open the video, then press Load in the sidebar and pick the session file to get the angles and bookmarks in the first screenshot below.
 
 It works with a finger or Apple Pencil on an iPad as well as with a mouse. On touch, points land a little above your fingertip so your finger never hides the joint you're aiming at, and a magnifier shows exactly where the point will go.
 
@@ -53,9 +53,19 @@ The Advanced button in the top bar adds a second set of tools for people who wan
 
 **Point tracking.** Pick a track (hip, knee, bar, toe, or your own name) and click the joint on each frame. KineLab advances a frame after every click and draws the path. With a scale set you get speed in m/s, vertical position and acceleration, plotted against time, and you can graph a joint angle built from three tracks. Velocities use a central difference over neighbouring frames, so a gap of more than two frames breaks the line rather than inventing a number. `T` picks the tracking tool.
 
-**Pose detection.** Detect places hip, knee, ankle, shoulder and elbow angles on the current frame using Google's MediaPipe pose model, and Track whole clip fills point tracks for a range of frames. The model (about 9 MB) downloads the first time you press it. Your video is still processed on your own machine. Treat the points as a starting draft: drag any that landed on the wrong side of the body.
+**Pose detection.** Detect places hip, knee, ankle, shoulder and elbow angles on the current frame using Google's MediaPipe pose model, and Track whole clip fills point tracks for a range of frames. The model (about 9 MB) downloads the first time you press it. Your video is still processed on your own machine. Treat the points as a starting draft: drag any that landed on the wrong side of the body. Pick the side nearest the camera, too. On the demo clip the right (near) leg comes out at 57.4° at the bottom of the squat against 56.6° placed by hand, while the far leg is mostly guesswork.
+
+<p align="center">
+  <img src="docs/app-advanced-tracking.png" alt="Hip, knee and ankle paths from pose detection drawn over the squat, with a graph of knee angle over time falling from about 169 degrees to 50 and rising again" width="100%">
+</p>
+
+The picture above came from two presses of Track this phase on the demo clip, one from Standing and one from Bottom. The graph is the knee angle worked out from the hip, knee and ankle tracks, with the three bookmarks marked along the bottom. The foot points jitter where the shoe meets the box, which is typical of pose models and why the knee curve is a little ragged.
 
 **More measurements.** Segment gives the angle of a body segment from vertical (trunk lean, shin angle). Lines∠ measures the angle between two separate lines, like trunk against shin. Plane corrects for perspective: click the four corners of a rectangle of known size on the floor and distances measured on that plane come out right even when the camera isn't square.
+
+<p align="center">
+  <img src="docs/app-advanced-segments.png" alt="The rising phase of the squat with trunk lean at 13.2 degrees and shin lean at 30.6 degrees from vertical" width="100%">
+</p>
 
 **Zoom, pan and mirror.** `Ctrl`/`⌘` + scroll or a pinch zooms at the cursor, `H` picks the hand tool for panning, `0` fits the frame again. `M` mirrors the picture so a left-side clip can be compared with a right-side one. Lengths and angles don't change when mirrored, but line tilt flips sign, since it follows what you see.
 
@@ -104,10 +114,6 @@ ffmpeg -i old-export.mp4 -c:v libx264 -crf 16 -pix_fmt yuv420p fixed.mp4
 ```
 
 HandBrake does the same job if you'd rather not use a terminal.
-
-<p align="center">
-  <img src="docs/app-rising.png" alt="The rising phase of the same squat, with knee at 102.4 degrees and hip at 119.8 degrees" width="100%">
-</p>
 
 ## Running it locally
 

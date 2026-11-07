@@ -109,6 +109,18 @@
     .toolbar-scroll::-webkit-scrollbar {
       display: none;
     }
+    /* Toolbar fitting (see fitToolbar): when the tools don't fit, drop labels in two steps,
+       then fade whichever edge has more tools hidden past it. Every button keeps its title. */
+    .top-bar.tb-measuring * { transition: none !important; } /* measure final widths, not mid-animation */
+    .top-bar.tb-tight .tool-btn { padding: 0 7px; } /* 7px: still a 38px-tall target, labels kept */
+    .top-bar.tb-compact .tool-btn span { display: none; }
+    .top-bar.tb-compact .tool-btn { padding: 0 10px; }
+    .top-bar.tb-compact-2 .brand-group .action-btn span,
+    .top-bar.tb-compact-2 .app-title { display: none; }
+    /* Why 28px: about half a tool button, enough to read as "more this way" without hiding an icon */
+    .toolbar-scroll.tb-fade-r { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+    .toolbar-scroll.tb-fade-l { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }
+    .toolbar-scroll.tb-fade-l.tb-fade-r { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
 
     .segmented-pill {
       display: flex;
@@ -1226,8 +1238,69 @@
       if (!KL.advanced && KL.tools[activeTool]) selectTool('angle'); // advanced tools vanish with the mode
       try { localStorage.setItem('kinelab.advanced', KL.advanced ? '1' : '0'); } catch (err) { /* private mode */ }
       KL.emit('advanced', { on: KL.advanced });
+      fitToolbar();
       renderFrame();
     }
+
+    // ---- Toolbar fitting ---------------------------------------------------------------
+    // Why: the top bar is one row. With Advanced on (or on a narrow screen) the tools are
+    // wider than the space, and the style, colour, undo and clear controls used to sit
+    // off-screen behind a hidden scrollbar. We tighten tool padding first, then drop tool
+    // labels (every tool keeps its tooltip), then the top-bar button labels, and only scroll if it still won't fit,
+    // with a fade on the side that has more controls past it.
+    const topBarEl = document.querySelector('.top-bar');
+    const toolbarScrollEl = document.querySelector('.toolbar-scroll');
+
+    /** Pick the least compact top-bar level that fits, then refresh the edge fades. */
+    function fitToolbar() {
+      // Why tb-measuring: .tool-btn animates padding, so widths read right after a class
+      // change would be mid-transition and could pick a level one step too compact.
+      topBarEl.classList.add('tb-measuring');
+      topBarEl.classList.remove('tb-tight', 'tb-compact', 'tb-compact-2');
+      const overflows = () => toolbarScrollEl.scrollWidth > toolbarScrollEl.clientWidth + 1; // +1: sub-pixel rounding
+      if (overflows()) topBarEl.classList.add('tb-tight');
+      if (overflows()) topBarEl.classList.replace('tb-tight', 'tb-compact');
+      if (overflows()) topBarEl.classList.add('tb-compact-2');
+      void topBarEl.offsetWidth; // commit the final layout before transitions come back
+      topBarEl.classList.remove('tb-measuring');
+      updateToolbarFade();
+    }
+
+    /** Fade an edge only while there are controls scrolled past it. */
+    function updateToolbarFade() {
+      const el = toolbarScrollEl;
+      const max = el.scrollWidth - el.clientWidth;
+      el.classList.toggle('tb-fade-l', max > 1 && el.scrollLeft > 1);
+      el.classList.toggle('tb-fade-r', max > 1 && el.scrollLeft < max - 1);
+    }
+
+    /** Keep the chosen tool on screen when the toolbar has to scroll. */
+    function revealActiveTool() {
+      const btn = toolbarScrollEl.querySelector('.tool-btn.active');
+      if (!btn || toolbarScrollEl.scrollWidth <= toolbarScrollEl.clientWidth + 1) return;
+      const box = toolbarScrollEl.getBoundingClientRect(), b = btn.getBoundingClientRect();
+      if (b.left < box.left) toolbarScrollEl.scrollLeft -= box.left - b.left + 28;       // 28: clear the fade
+      else if (b.right > box.right) toolbarScrollEl.scrollLeft += b.right - box.right + 28;
+    }
+
+    toolbarScrollEl.addEventListener('scroll', updateToolbarFade, { passive: true });
+    // Why: a mouse wheel only scrolls vertically, so without this a desktop user with no
+    // trackpad had no way to reach the hidden controls.
+    toolbarScrollEl.addEventListener('wheel', (e) => {
+      if (e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+      const max = toolbarScrollEl.scrollWidth - toolbarScrollEl.clientWidth;
+      if (max <= 1) return;
+      e.preventDefault();
+      toolbarScrollEl.scrollLeft += e.deltaY;
+    }, { passive: false });
+    if (window.ResizeObserver) new ResizeObserver(fitToolbar).observe(topBarEl);
+    else window.addEventListener('resize', fitToolbar);
+    // Advanced modules add their tool buttons after this script runs; refit when they do.
+    new MutationObserver(fitToolbar).observe(toolbarScrollEl, { childList: true, subtree: true });
+    // Why also on load: measurements taken while the page is still building can read too
+    // wide, and nothing would undo that compaction until the window was resized.
+    window.addEventListener('load', () => requestAnimationFrame(fitToolbar));
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitToolbar);
 
     const STEP_DT = 1 / 60; // Demo-figure only: the built-in animation is modelled at 60 fps
     const DEMO_DURATION = 2.5; // Seconds per loop of the demo figure; demoTime is 0..1 of this
@@ -1750,6 +1823,7 @@
       document.querySelectorAll('.tool-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.tool === tool);
       });
+      revealActiveTool();
       updatePromptBanner();
       renderFrame();
     }

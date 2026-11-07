@@ -43,6 +43,26 @@ Put the scale reference in the same plane as the athlete. A metre stick on the n
 
 Check the frame rate. The detector snaps to standard rates (24, 25, 30, 50, 60, 120, 240 and the NTSC variants), and the footer shows `~30 fps` with a tilde if it had to guess. Slow-motion clips that have been exported or shared from a phone are often re-timed to 30 fps even though they were filmed at 240. KineLab can only see the file, so the time between bookmarks will be in slowed-down clip time unless you type the real capture rate in yourself.
 
+## Advanced mode
+
+The Advanced button in the top bar adds a second set of tools for people who want more than angles and distances. Leave it off and KineLab looks and behaves exactly as described above. KineLab remembers the setting next time you open it.
+
+**Jump height and phases.** Mark take-off and landing bookmarks and KineLab works out jump height from flight time (h = g·t²/8), with the flight time and frame count shown next to it so you can check them. Each bookmark can carry a note, and you can loop the stretch between two bookmarks at any playback speed with `L`.
+
+**Undo, redo and autosave.** Every change goes into a proper history, so `Ctrl`/`⌘` + `Z` steps back through moves, deletes and edits, not only the last line you drew. Your work is saved in the browser as you go, keyed to the clip, so if the tab closes you're offered the analysis back next time you open the same video. `C` copies the markups on this frame 1, 2, 5 or 10 frames ahead as a new bookmark and jumps there, so you nudge the points instead of redrawing every angle on every frame.
+
+**Point tracking.** Pick a track (hip, knee, bar, toe, or your own name) and click the joint on each frame. KineLab advances a frame after every click and draws the path. With a scale set you get speed in m/s, vertical position and acceleration, plotted against time, and you can graph a joint angle built from three tracks. Velocities use a central difference over neighbouring frames, so a gap of more than two frames breaks the line rather than inventing a number. `T` picks the tracking tool.
+
+**Pose detection.** Detect places hip, knee, ankle, shoulder and elbow angles on the current frame using Google's MediaPipe pose model, and Track whole clip fills point tracks for a range of frames. The model (about 9 MB) downloads the first time you press it. Your video is still processed on your own machine. Treat the points as a starting draft: drag any that landed on the wrong side of the body.
+
+**More measurements.** Segment gives the angle of a body segment from vertical (trunk lean, shin angle). Lines∠ measures the angle between two separate lines, like trunk against shin. Plane corrects for perspective: click the four corners of a rectangle of known size on the floor and distances measured on that plane come out right even when the camera isn't square.
+
+**Zoom, pan and mirror.** `Ctrl`/`⌘` + scroll or a pinch zooms at the cursor, `H` picks the hand tool for panning, `0` fits the frame again. `M` mirrors the picture so a left-side clip can be compared with a right-side one. Lengths and angles don't change when mirrored, but line tilt flips sign, since it follows what you see.
+
+**Compare and export.** Open a second clip to play alongside the first or as a see-through overlay, nudge it a frame at a time and press Sync here to line the two up. Export video saves an MP4 of any bookmarked stretch with every markup drawn on, at full, half or quarter speed.
+
+Everything Advanced adds goes into the session file and the CSV.
+
 ## Keyboard
 
 | Key | Does |
@@ -52,6 +72,18 @@ Check the frame rate. The detector snaps to standard rates (24, 25, 30, 50, 60, 
 | `Shift` + `←` `→` | Five frames |
 | `B` | Bookmark the current frame |
 | `[` `]` | Previous or next bookmark |
+
+With Advanced on you also get these:
+
+| Key | Does |
+| --- | --- |
+| `Ctrl`/`⌘` + `Z`, `Ctrl`/`⌘` + `Shift` + `Z` | Undo, redo |
+| `C` | Copy markups forward |
+| `L` | Loop between bookmarks |
+| `T` | Tracking tool |
+| `H` | Hand tool |
+| `+` `-` `0` | Zoom in, out, fit |
+| `M` | Mirror |
 
 ## Saving and exporting
 
@@ -85,11 +117,11 @@ There's nothing to build. Opening the file directly works, but if you're changin
 python3 -m http.server 8000
 ```
 
-Then go to `http://localhost:8000`. All the code lives in one `<script>` block at the bottom of `index.html`, and the styling sits in the `<style>` block at the top.
+Then go to `http://localhost:8000`. The core app lives in the main `<script>` block of `index.html`, and the styling sits in the `<style>` block at the top. Each Advanced feature is a separate file in `adv/` that talks to the core through `window.KL`. After editing one, run `python3 tools/build.py` to copy them back into `index.html`, so the page still works as a single file.
 
 ## Credits
 
-KineLab was started by [Nicholas Whittaker](https://github.com/n-whittaker/KineLab). This fork adds the calibrated scale reference, frame-accurate stepping with frame rate detection, phase bookmarks, PNG and CSV export, session files, and a round of fixes to how angles and distances are calculated.
+KineLab was started by [Nicholas Whittaker](https://github.com/n-whittaker/KineLab). This fork adds the calibrated scale reference, frame-accurate stepping with frame rate detection, phase bookmarks, PNG and CSV export, session files, the Advanced mode tools, and a round of fixes to how angles and distances are calculated.
 
 The demo clip is a cut of [A Woman Exercising Over a Wooden Box](https://www.pexels.com/video/a-woman-exercising-over-a-wooden-box-7675456/) by cottonbro studio, used under the [Pexels licence](https://www.pexels.com/license/).
 

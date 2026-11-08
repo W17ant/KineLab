@@ -45,7 +45,13 @@ Check the frame rate. The detector snaps to standard rates (24, 25, 30, 50, 60, 
 
 ## Advanced mode
 
-The Advanced button in the top bar adds a second set of tools for people who want more than angles and distances. Leave it off and KineLab looks and behaves exactly as described above. KineLab remembers the setting next time you open it.
+Advanced mode is a second set of tools for people who want more than angles and distances. It isn't on the website, which stays the basic version so a class can be pointed at it without the extra tools getting in the way. To use Advanced, run KineLab on your own computer:
+
+1. On the GitHub page, press Code, then Download ZIP, and unzip it.
+2. Open a terminal in the unzipped folder and run `python3 -m http.server 8000`.
+3. Go to `http://localhost:8000/advanced.html`.
+
+It opens with Advanced switched on. The Advanced button in the top bar hides the extra tools again if you want the basic layout for a moment. Pose detection also needs an internet connection the first time, to download its model.
 
 **Jump height and phases.** Mark take-off and landing bookmarks and KineLab works out jump height from flight time (h = g·t²/8), with the flight time and frame count shown next to it so you can check them. Each bookmark can carry a note, and you can loop the stretch between two bookmarks at any playback speed with `L`.
 
@@ -71,7 +77,7 @@ The picture above came from two presses of Track this phase on the demo clip, on
 
 **Compare and export.** Open a second clip to play alongside the first or as a see-through overlay, nudge it a frame at a time and press Sync here to line the two up. Export video saves an MP4 of any bookmarked stretch with every markup drawn on, at full, half or quarter speed.
 
-Everything Advanced adds goes into the session file and the CSV.
+Everything Advanced adds goes into the session file and the CSV. A session saved in Advanced still opens on the website: the angles, lines and bookmarks come through, and anything only Advanced can draw is skipped with a note saying how many items were left out.
 
 ## Keyboard
 
@@ -123,7 +129,9 @@ There's nothing to build. Opening the file directly works, but if you're changin
 python3 -m http.server 8000
 ```
 
-Then go to `http://localhost:8000`. The core app lives in the main `<script>` block of `index.html`, and the styling sits in the `<style>` block at the top. Each Advanced feature is a separate file in `adv/` that talks to the core through `window.KL`. After editing one, run `python3 tools/build.py` to copy them back into `index.html`, so the page still works as a single file.
+Then go to `http://localhost:8000`. The core app lives in the main `<script>` block of `index.html`, and the styling sits in the `<style>` block at the top. `index.html` is also the basic app the website serves.
+
+Each Advanced feature is a separate file in `adv/` that talks to the core through `window.KL`. Running `python3 tools/build.py` copies `index.html` and every `adv/` file into `advanced.html`, which is still a single file. Run it after changing either, and don't edit `advanced.html` by hand because the next build overwrites it. `_config.yml` keeps `advanced.html`, `adv/` and `tools/` off the website.
 
 ## Credits
 

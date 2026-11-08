@@ -1,8 +1,12 @@
-"""build.py - inline adv/*.js modules into index.html so the app stays a single file.
+"""build.py - build advanced.html from index.html plus every adv/*.js module, still a single file.
 
 Usage:
-  python3 tools/build.py                      # inline every adv/*.js into index.html (in place)
+  python3 tools/build.py                      # write advanced.html (index.html + every adv/*.js)
   python3 tools/build.py --only a,b --out X   # inline only adv/a.js and adv/b.js, write to X (for testing)
+
+Why two files: index.html is the basic app and is what GitHub Pages serves, so students on the
+public site never get the Advanced code. advanced.html is excluded from the site (_config.yml)
+and run locally. index.html is never modified here; its module block stays empty.
 
 Why markers: the block between them is regenerated each run, so the build is repeatable.
 """
@@ -10,6 +14,7 @@ import argparse, pathlib, re, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 START, END = "<!-- @@ADVANCED_MODULES@@ -->", "<!-- @@END_ADVANCED_MODULES@@ -->"
+GENERATED_NOTE = "<!-- Built by tools/build.py from index.html and adv/*.js. Edit those, not this file. -->"
 
 def main():
     ap = argparse.ArgumentParser()
@@ -37,7 +42,8 @@ def main():
         src = re.sub(re.escape(START) + r".*?" + re.escape(END), lambda m: generated, src, flags=re.S)
     else:
         src = src.replace(START, generated)
-    out = pathlib.Path(args.out) if args.out else ROOT / "index.html"
+    src = src.replace("<!DOCTYPE html>", "<!DOCTYPE html>\n" + GENERATED_NOTE, 1)
+    out = pathlib.Path(args.out) if args.out else ROOT / "advanced.html"
     out.write_text(src)
     print(f"inlined {len(names)} module(s) into {out}: {', '.join(names) or '-'}")
 

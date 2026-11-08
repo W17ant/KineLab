@@ -1,0 +1,7 @@
+# GitHub Pages (Jekyll) settings.
+# Why exclude: the public site is the basic app only. advanced.html and its sources are
+# for running locally from a download of the repo, not for students on the site.
+exclude:
+  - advanced.html
+  - adv/
+  - tools/

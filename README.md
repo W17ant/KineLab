@@ -43,42 +43,6 @@ Put the scale reference in the same plane as the athlete. A metre stick on the n
 
 Check the frame rate. The detector snaps to standard rates (24, 25, 30, 50, 60, 120, 240 and the NTSC variants), and the footer shows `~30 fps` with a tilde if it had to guess. Slow-motion clips that have been exported or shared from a phone are often re-timed to 30 fps even though they were filmed at 240. KineLab can only see the file, so the time between bookmarks will be in slowed-down clip time unless you type the real capture rate in yourself.
 
-## Advanced mode
-
-Advanced mode is a second set of tools for people who want more than angles and distances. It isn't on the website, which stays the basic version so a class can be pointed at it without the extra tools getting in the way. To use Advanced, run KineLab on your own computer:
-
-1. On the GitHub page, press Code, then Download ZIP, and unzip it.
-2. Open a terminal in the unzipped folder and run `python3 -m http.server 8000`.
-3. Go to `http://localhost:8000/advanced.html`.
-
-It opens with Advanced switched on. The Advanced button in the top bar hides the extra tools again if you want the basic layout for a moment. Pose detection also needs an internet connection the first time, to download its model.
-
-**Jump height and phases.** Mark take-off and landing bookmarks and KineLab works out jump height from flight time (h = g·t²/8), with the flight time and frame count shown next to it so you can check them. Each bookmark can carry a note, and you can loop the stretch between two bookmarks at any playback speed with `L`.
-
-**Undo, redo and autosave.** Every change goes into a proper history, so `Ctrl`/`⌘` + `Z` steps back through moves, deletes and edits, not only the last line you drew. Your work is saved in the browser as you go, keyed to the clip, so if the tab closes you're offered the analysis back next time you open the same video. `C` copies the markups on this frame 1, 2, 5 or 10 frames ahead as a new bookmark and jumps there, so you nudge the points instead of redrawing every angle on every frame.
-
-**Point tracking.** Pick a track (hip, knee, bar, toe, or your own name) and click the joint on each frame. KineLab advances a frame after every click and draws the path. With a scale set you get speed in m/s, vertical position and acceleration, plotted against time, and you can graph a joint angle built from three tracks. Velocities use a central difference over neighbouring frames, so a gap of more than two frames breaks the line rather than inventing a number. `T` picks the tracking tool.
-
-**Pose detection.** Detect places hip, knee, ankle, shoulder and elbow angles on the current frame using Google's MediaPipe pose model, and Track whole clip fills point tracks for a range of frames. The model (about 9 MB) downloads the first time you press it. Your video is still processed on your own machine. Treat the points as a starting draft: drag any that landed on the wrong side of the body. Pick the side nearest the camera, too. On the demo clip the right (near) leg comes out at 57.4° at the bottom of the squat against 56.6° placed by hand, while the far leg is mostly guesswork.
-
-<p align="center">
-  <img src="docs/app-advanced-tracking.png" alt="Hip, knee and ankle paths from pose detection drawn over the squat, with a graph of knee angle over time falling from about 169 degrees to 50 and rising again" width="100%">
-</p>
-
-The picture above came from two presses of Track this phase on the demo clip, one from Standing and one from Bottom. The graph is the knee angle worked out from the hip, knee and ankle tracks, with the three bookmarks marked along the bottom. The foot points jitter where the shoe meets the box, which is typical of pose models and why the knee curve is a little ragged.
-
-**More measurements.** Segment gives the angle of a body segment from vertical (trunk lean, shin angle). Lines∠ measures the angle between two separate lines, like trunk against shin. Plane corrects for perspective: click the four corners of a rectangle of known size on the floor and distances measured on that plane come out right even when the camera isn't square.
-
-<p align="center">
-  <img src="docs/app-advanced-segments.png" alt="The rising phase of the squat with trunk lean at 13.2 degrees and shin lean at 30.6 degrees from vertical" width="100%">
-</p>
-
-**Zoom, pan and mirror.** `Ctrl`/`⌘` + scroll or a pinch zooms at the cursor, `H` picks the hand tool for panning, `0` fits the frame again. `M` mirrors the picture so a left-side clip can be compared with a right-side one. Lengths and angles don't change when mirrored, but line tilt flips sign, since it follows what you see.
-
-**Compare and export.** Open a second clip to play alongside the first or as a see-through overlay, nudge it a frame at a time and press Sync here to line the two up. Export video saves an MP4 of any bookmarked stretch with every markup drawn on, at full, half or quarter speed.
-
-Everything Advanced adds goes into the session file and the CSV. A session saved in Advanced still opens on the website: the angles, lines and bookmarks come through, and anything only Advanced can draw is skipped with a note saying how many items were left out.
-
 ## Keyboard
 
 | Key | Does |
@@ -88,18 +52,6 @@ Everything Advanced adds goes into the session file and the CSV. A session saved
 | `Shift` + `←` `→` | Five frames |
 | `B` | Bookmark the current frame |
 | `[` `]` | Previous or next bookmark |
-
-With Advanced on you also get these:
-
-| Key | Does |
-| --- | --- |
-| `Ctrl`/`⌘` + `Z`, `Ctrl`/`⌘` + `Shift` + `Z` | Undo, redo |
-| `C` | Copy markups forward |
-| `L` | Loop between bookmarks |
-| `T` | Tracking tool |
-| `H` | Hand tool |
-| `+` `-` `0` | Zoom in, out, fit |
-| `M` | Mirror |
 
 ## Saving and exporting
 
@@ -129,13 +81,11 @@ There's nothing to build. Opening the file directly works, but if you're changin
 python3 -m http.server 8000
 ```
 
-Then go to `http://localhost:8000`. The core app lives in the main `<script>` block of `index.html`, and the styling sits in the `<style>` block at the top. `index.html` is also the basic app the website serves.
-
-Each Advanced feature is a separate file in `adv/` that talks to the core through `window.KL`. Running `python3 tools/build.py` copies `index.html` and every `adv/` file into `advanced.html`, which is still a single file. Run it after changing either, and don't edit `advanced.html` by hand because the next build overwrites it. `_config.yml` keeps `advanced.html`, `adv/` and `tools/` off the website.
+Then go to `http://localhost:8000`. The app lives in the main `<script>` block of `index.html`, and the styling sits in the `<style>` block at the top.
 
 ## Credits
 
-KineLab was started by [Nicholas Whittaker](https://github.com/n-whittaker/KineLab). This fork adds the calibrated scale reference, frame-accurate stepping with frame rate detection, phase bookmarks, PNG and CSV export, session files, the Advanced mode tools, and a round of fixes to how angles and distances are calculated.
+KineLab was started by [Nicholas Whittaker](https://github.com/n-whittaker/KineLab). This fork adds the calibrated scale reference, frame-accurate stepping with frame rate detection, phase bookmarks, PNG and CSV export, session files, and a round of fixes to how angles and distances are calculated.
 
 The demo clip is a cut of [A Woman Exercising Over a Wooden Box](https://www.pexels.com/video/a-woman-exercising-over-a-wooden-box-7675456/) by cottonbro studio, used under the [Pexels licence](https://www.pexels.com/license/).
 

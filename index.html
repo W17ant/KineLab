@@ -1228,7 +1228,7 @@
       }
     };
 
-    /** Show or hide everything marked data-adv, and tell modules. Only reachable in advanced.html. */
+    /** Show or hide everything marked data-adv, and tell modules. Only reachable in the Advanced build. */
     function toggleAdvanced(force) {
       KL.advanced = typeof force === 'boolean' ? force : !KL.advanced;
       const btn = document.getElementById('advancedToggleBtn');
@@ -3615,9 +3615,9 @@
 
     KL.panel = document.getElementById('advancedPanel');
     KL.toolbar = document.querySelector('.segmented-pill');
-    // Why two files: index.html (the public site students use) ships with no Advanced modules
-    // at all, so there is nothing to switch on. tools/build.py inlines them into advanced.html,
-    // which is kept off the site and opens with Advanced on. The modules load in later
+    // Why: this file is the public basic app and ships with no Advanced modules, so there is
+    // nothing to switch on. A separate private build inlines modules into the empty block near
+    // the end of the page; that build opens with Advanced on. The modules load in later
     // <script> blocks, so decide once they have registered their controls.
     document.addEventListener('DOMContentLoaded', () => {
       const advancedBuild = document.querySelector('script[data-module]') !== null;
